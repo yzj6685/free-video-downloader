@@ -1,0 +1,39 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    min-width: 320px;
+    margin: 0;
+    background:
+      radial-gradient(circle at 18% 12%, rgba(255, 107, 95, 0.14), transparent 28%),
+      radial-gradient(circle at 86% 4%, rgba(91, 192, 235, 0.18), transparent 26%),
+      linear-gradient(180deg, #fffaf0 0%, #fffdf8 46%, #f7fbff 100%);
+    color: #161612;
+  }
+
+  button,
+  input,
+  select {
+    font: inherit;
+  }
+}
+
+@layer components {
+  .section-shell {
+    @apply mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8;
+  }
+
+  .tile {
+    @apply rounded-lg border border-black/10 bg-white/80 shadow-lift backdrop-blur;
+  }
+
+  .focus-ring {
+    @apply focus:outline-none focus-visible:ring-4 focus-visible:ring-grape/25;
+  }
+}

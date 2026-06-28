@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+web/node_modules/
+api/.venv/
+.pnpm-store/
+
+# Build outputs
+web/dist/
+
+# Local binary tools
+tools/ffmpeg/bin/*.exe
+tools/ffmpeg-release-essentials.zip
+tools/ffmpeg-download/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local environment
+.env
+.env.*
+
+# Local screenshots and temporary files
+*-screenshot.png
