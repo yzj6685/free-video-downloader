@@ -49,7 +49,7 @@ class YtDlpService:
         try:
             info = await run_in_threadpool(self._extract_info, url)
         except HTTPException as exc:
-            if exc.status_code == 428 and bilibili_fallback_service.can_handle(url):
+            if bilibili_fallback_service.can_handle(url):
                 return await run_in_threadpool(bilibili_fallback_service.probe, url)
             if douyin_fallback_service.can_handle(url):
                 return await run_in_threadpool(douyin_fallback_service.probe, url)

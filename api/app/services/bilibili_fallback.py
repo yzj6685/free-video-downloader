@@ -4,12 +4,15 @@ import json
 import re
 import urllib.parse
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import httpx
 from fastapi import HTTPException
 
-from app.models import ProbeResponse, VideoFormat
+from app.config import get_settings
+from app.models import ProbeResponse, TranscriptSegment, VideoFormat
+from app.services.browser_cookie_service import browser_cookie_service
 
 
 class BilibiliFallbackService:
@@ -23,7 +26,7 @@ class BilibiliFallbackService:
         aid = video.get("aid")
         cid = video.get("cid") or self._first_page_cid(video)
         if not (bvid and cid):
-            raise HTTPException(status_code=502, detail="B站页面可访问，但未找到可下载的视频分集信息。")
+            raise HTTPException(status_code=502, detail="B 站页面可访问，但未找到可下载的视频分集信息。")
 
         formats = self._play_formats(str(bvid), int(cid), int(aid) if aid else None)
         title = video.get("title") or "B站视频"
@@ -46,17 +49,61 @@ class BilibiliFallbackService:
         aid = video.get("aid")
         cid = video.get("cid") or self._first_page_cid(video)
         if not (bvid and cid):
-            raise HTTPException(status_code=502, detail="B站页面可访问，但未找到可下载的视频分集信息。")
+            raise HTTPException(status_code=502, detail="B 站页面可访问，但未找到可下载的视频分集信息。")
 
         quality = self._quality_from_format(format_id)
         play_info = self._playurl(str(bvid), int(cid), quality, int(aid) if aid else None)
         durl = ((play_info.get("data") or {}).get("durl") or [{}])[0]
         media_url = durl.get("url")
         if not media_url:
-            raise HTTPException(status_code=502, detail="B站低清下载地址获取失败，请稍后重试。")
+            raise HTTPException(status_code=502, detail="B 站低清下载地址获取失败，请稍后重试。")
 
         filename = self._safe_filename(video.get("title") or bvid, "mp4")
         return media_url, filename
+
+    def subtitles(self, url: str, language: str = "zh") -> tuple[str, list[TranscriptSegment]]:
+        state = self._initial_state(url)
+        video = state.get("videoData") or {}
+        bvid = video.get("bvid")
+        aid = video.get("aid")
+        cid = video.get("cid") or self._first_page_cid(video)
+        if not (bvid and cid):
+            raise HTTPException(status_code=502, detail="B 站页面可访问，但未找到字幕所需的视频分集信息。")
+
+        page_track = self._pick_subtitle_track(((video.get("subtitle") or {}).get("list")) or [], language)
+        track = page_track if self._track_url(page_track) else None
+        if not track:
+            track = self._dm_subtitle_track(str(bvid), int(cid), int(aid) if aid else None, language)
+        if not track:
+            track = self._subtitle_track(str(bvid), int(cid), int(aid) if aid else None, language)
+        if not track:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "当前 B 站视频未返回可提取字幕正文。系统已尝试公开字幕接口和本机浏览器登录态；"
+                    "如果网页播放器里能看到字幕，请确认 Chrome/Edge 已登录 B 站，或关闭浏览器后重试。"
+                ),
+            )
+
+        subtitle_url = self._track_url(track)
+        if not subtitle_url:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "当前 B 站视频只暴露了字幕记录，未开放字幕正文地址。"
+                    "请确认浏览器已登录 B 站，或关闭 Chrome/Edge 后重试自动读取登录态。"
+                ),
+            )
+
+        with httpx.Client(headers=self._headers("https://www.bilibili.com/"), timeout=30) as client:
+            response = client.get(subtitle_url)
+            response.raise_for_status()
+            payload = response.json()
+
+        segments = self._parse_subtitle_body(payload)
+        if not segments:
+            raise HTTPException(status_code=422, detail="当前 B 站视频字幕为空或无法解析，音频转写将在后续版本支持。")
+        return video.get("title") or "B站视频", segments
 
     def stream(self, media_url: str) -> Iterator[bytes]:
         headers = self._headers("https://www.bilibili.com/")
@@ -72,7 +119,7 @@ class BilibiliFallbackService:
             response.raise_for_status()
         match = re.search(r"window\.__INITIAL_STATE__=(.*?);\(function\(\)", response.text)
         if not match:
-            raise HTTPException(status_code=502, detail="B站页面结构发生变化，无法提取视频信息。")
+            raise HTTPException(status_code=502, detail="B 站页面结构发生变化，无法提取视频信息。")
         return json.loads(match.group(1))
 
     def _play_formats(self, bvid: str, cid: int, aid: int | None) -> list[VideoFormat]:
@@ -97,7 +144,7 @@ class BilibiliFallbackService:
                 )
             )
         if not formats:
-            raise HTTPException(status_code=502, detail="B站公开视频可读取，但暂时没有返回可下载 mp4 格式。")
+            raise HTTPException(status_code=502, detail="B 站公开视频可读取，但暂时没有返回可下载 mp4 格式。")
         return formats
 
     def _playurl(self, bvid: str, cid: int, quality: int, aid: int | None) -> dict[str, Any]:
@@ -118,8 +165,74 @@ class BilibiliFallbackService:
             response.raise_for_status()
             payload = response.json()
         if payload.get("code") != 0:
-            raise HTTPException(status_code=502, detail=payload.get("message") or "B站播放地址接口返回失败。")
+            raise HTTPException(status_code=502, detail=payload.get("message") or "B 站播放地址接口返回失败。")
         return payload
+
+    def _subtitle_track(self, bvid: str, cid: int, aid: int | None, language: str) -> dict[str, Any] | None:
+        query = {"bvid": bvid, "cid": str(cid)}
+        if aid:
+            query["aid"] = str(aid)
+        url = f"https://api.bilibili.com/x/player/v2?{urllib.parse.urlencode(query)}"
+        with httpx.Client(headers=self._headers("https://www.bilibili.com/"), timeout=25) as client:
+            response = client.get(url)
+            response.raise_for_status()
+            payload = response.json()
+        if payload.get("code") != 0:
+            raise HTTPException(status_code=502, detail=payload.get("message") or "B 站字幕接口返回失败。")
+
+        subtitles = (((payload.get("data") or {}).get("subtitle") or {}).get("subtitles") or [])
+        return self._pick_subtitle_track(subtitles, language)
+
+    def _dm_subtitle_track(self, bvid: str, cid: int, aid: int | None, language: str) -> dict[str, Any] | None:
+        if not aid:
+            return None
+        query = {"aid": str(aid), "oid": str(cid), "type": "1"}
+        url = f"https://api.bilibili.com/x/v2/dm/view?{urllib.parse.urlencode(query)}"
+        with httpx.Client(headers=self._headers(f"https://www.bilibili.com/video/{bvid}"), timeout=25) as client:
+            response = client.get(url)
+            response.raise_for_status()
+            payload = response.json()
+        if payload.get("code") != 0:
+            return None
+        subtitles = (((payload.get("data") or {}).get("subtitle") or {}).get("subtitles") or [])
+        return self._pick_subtitle_track(subtitles, language)
+
+    def _pick_subtitle_track(self, subtitles: Any, language: str) -> dict[str, Any] | None:
+        if not isinstance(subtitles, list) or not subtitles:
+            return None
+
+        language_order = [language.lower(), "zh-cn", "zh-hans", "zh", "zh-tw", "en"]
+
+        def score(item: dict[str, Any]) -> int:
+            lan = str(item.get("lan") or item.get("lan_doc") or "").lower()
+            try:
+                return next(index for index, prefix in enumerate(language_order) if lan.startswith(prefix))
+            except StopIteration:
+                return len(language_order)
+
+        candidates = [item for item in subtitles if isinstance(item, dict)]
+        return sorted(candidates, key=score)[0] if candidates else None
+
+    def _track_url(self, track: dict[str, Any] | None) -> str | None:
+        if not track:
+            return None
+        return self._normalize_url(track.get("subtitle_url") or track.get("url"))
+
+    def _parse_subtitle_body(self, payload: dict[str, Any]) -> list[TranscriptSegment]:
+        segments: list[TranscriptSegment] = []
+        for item in payload.get("body") or []:
+            if not isinstance(item, dict):
+                continue
+            content = str(item.get("content") or "").strip()
+            if not content:
+                continue
+            start = item.get("from")
+            end = item.get("to")
+            try:
+                segments.append(TranscriptSegment(start=float(start), end=float(end) if end is not None else None, text=content))
+            except (TypeError, ValueError):
+                continue
+        return segments
 
     def _first_page_cid(self, video: dict[str, Any]) -> int | None:
         pages = video.get("pages") or []
@@ -132,7 +245,7 @@ class BilibiliFallbackService:
         return int(match.group(1)) if match else 16
 
     def _headers(self, referer: str) -> dict[str, str]:
-        return {
+        headers = {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -140,13 +253,44 @@ class BilibiliFallbackService:
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             "Referer": referer,
         }
+        cookie_header = self._cookie_header()
+        if cookie_header:
+            headers["Cookie"] = cookie_header
+        return headers
 
     def _normalize_url(self, value: str | None) -> str | None:
         if not value:
             return None
         if value.startswith("//"):
             return f"https:{value}"
+        if value.startswith("http://"):
+            return f"https://{value[7:]}"
         return value.replace("\\/", "/")
+
+    def _cookie_header(self) -> str:
+        pairs: dict[str, str] = {}
+        cookie_file = get_settings().cookie_file_path
+        if cookie_file:
+            path = Path(cookie_file)
+            for raw_line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#") and not line.startswith("#HttpOnly_"):
+                    continue
+                if line.startswith("#HttpOnly_"):
+                    line = line.removeprefix("#HttpOnly_")
+                parts = line.split("\t")
+                if len(parts) >= 7:
+                    domain, _, _, _, _, name, value = parts[:7]
+                    if "bilibili.com" in domain and name and value:
+                        pairs[name] = value
+
+        browser_header = browser_cookie_service.bilibili_cookie_header(get_settings().browser_cookie_sources)
+        for item in browser_header.split("; "):
+            if "=" not in item:
+                continue
+            name, value = item.split("=", 1)
+            pairs[name] = value
+        return "; ".join(f"{name}={value}" for name, value in pairs.items())
 
     def _safe_filename(self, title: str, ext: str) -> str:
         cleaned = "".join(ch if ch.isalnum() or ch in " ._-" else "_" for ch in title)

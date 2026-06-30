@@ -36,3 +36,47 @@ export interface ComingSoonResponse {
   feature: string;
   message: string;
 }
+
+export interface TranscriptSegment {
+  start: number;
+  end?: number | null;
+  text: string;
+}
+
+export interface AiOutlineItem {
+  title: string;
+  start?: number | null;
+  summary: string;
+}
+
+export interface AiAnalysisResponse {
+  analysis_id: string;
+  title: string;
+  source_url: string;
+  summary: string;
+  outline: AiOutlineItem[];
+  key_points: string[];
+  transcript_segments: TranscriptSegment[];
+  suggested_questions: string[];
+  model: string;
+  created_at: string;
+}
+
+export interface AiChatResponse {
+  answer: string;
+  related_segments: TranscriptSegment[];
+  model: string;
+}
+
+export interface AiChatMessage {
+  question: string;
+  answer: string;
+  related_segments: TranscriptSegment[];
+}
+
+export type AiAnalysisStreamEvent =
+  | { type: "status"; message: string }
+  | { type: "transcript_ready"; title: string; transcript_count: number; transcript_segments: TranscriptSegment[] }
+  | { type: "summary_delta"; delta: string }
+  | { type: "complete"; analysis: AiAnalysisResponse }
+  | { type: "error"; status_code?: number; message: string };

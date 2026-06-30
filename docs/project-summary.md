@@ -32,6 +32,7 @@
 - 抖音无封面兜底：`/api/media/video-preview` 使用视频首帧预览，并支持 Range 小片段请求。
 - 下载交付统一走同源代理优先，前端用 `<a download>` 触发，不再打开 `about:blank` 空白页。
 - 静态会员套餐、AI 功能占位接口、能力说明接口。
+- AI 视频分析：解析视频后提取平台字幕，调用 DeepSeek 生成摘要、大纲、核心知识点、转录文本，并支持视频内容问答。
 - 本地 FFmpeg 支持：后端会优先读取 `FFMPEG_LOCATION`，否则自动查找 `tools/ffmpeg/bin`。
 
 ## 关键接口
@@ -46,13 +47,19 @@
 - `GET /api/billing/plans`：静态会员套餐。
 - `POST /api/ai/summary`：视频总结占位。
 - `POST /api/ai/translate-subtitles`：字幕翻译占位。
+- `POST /api/ai/analyze`：基于平台字幕生成 AI 学习笔记。
+- `POST /api/ai/chat`：基于当前分析结果追问视频内容。
 
 ## 关键文件
 
 - `api/app/services/ytdlp_service.py`：通用 yt-dlp 封装、FFmpeg 路径注入、下载流、封面代理、预览 Range 流。
 - `api/app/services/bilibili_fallback.py`：B 站 HTML5 mp4 兜底解析。
 - `api/app/services/douyin_fallback.py`：抖音解析源适配、多格式生成、文件大小探测。
+- `api/app/services/subtitle_service.py`：平台字幕提取、字幕选择和 `vtt/srt/json3` 解析。
+- `api/app/services/deepseek_client.py`：DeepSeek Chat Completions 调用封装。
+- `api/app/services/ai_analysis_service.py`：AI 分析编排、长字幕分块、内存缓存和问答。
 - `api/app/routers/video.py`：视频解析、下载、封面、预览接口。
+- `api/app/routers/ai_analysis.py`：AI 分析和视频问答接口。
 - `web/src/App.vue`：主页面交互、封面/预览展示、下载触发。
 - `web/scripts/e2e-smoke.mjs`：端到端烟测。
 - `docs/requirements-analysis.md`：需求分析沉淀。
@@ -82,12 +89,33 @@ cd C:\code\ai-code\free-video-downloader
 
 当前最近一次验证结果：
 
-- 后端测试：`10 passed`
+- 后端测试：`26 passed`
 - 前端类型检查：通过
 - 前端生产构建：通过
 - 端到端烟测：通过
 - B 站：解析、封面代理、下载代理通过
 - 抖音：解析、多格式、大小、预览、下载代理通过
+
+## AI 视频分析配置
+
+AI 分析一期使用 DeepSeek 做文本摘要和问答，只处理平台可提取字幕，不做音频 ASR 转写。使用前需要配置：
+
+```powershell
+$env:DEEPSEEK_API_KEY="你的 DeepSeek API Key"
+$env:DEEPSEEK_BASE_URL="https://api.deepseek.com"
+$env:DEEPSEEK_MODEL="deepseek-v4-pro"
+```
+
+可选配置：
+
+```powershell
+$env:AI_CACHE_TTL_SECONDS="3600"
+$env:AI_MAX_TRANSCRIPT_CHARS="24000"
+```
+
+无字幕视频会返回明确提示：“当前视频没有可提取字幕，音频转写将在后续版本支持。”
+
+B 站字幕提取已参考 `liyupi/free-video-downloader` 的实现做专用兜底：页面初始数据没有 `subtitle_url` 时，会请求 `x/v2/dm/view?aid=...&oid=...&type=1` 获取 CC 字幕 / AI 字幕；若仍失败，再尝试 `x/player/v2` 和本机 Chrome/Edge 登录态 Cookie。当前 `BV1mAAmzqEfP` 已验证可提取 114 段字幕并完成 AI 分析。
 
 ## FFmpeg 说明
 

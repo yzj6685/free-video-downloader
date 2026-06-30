@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import ai, billing, video
+from app.routers import ai, ai_analysis, billing, video
 
 app = FastAPI(
     title="万能视频下载器 API",
@@ -19,4 +19,5 @@ app.add_middleware(
 
 app.include_router(video.router)
 app.include_router(ai.router)
+app.include_router(ai_analysis.router)
 app.include_router(billing.router)

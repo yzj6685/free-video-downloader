@@ -86,7 +86,7 @@ npm run dev:local
 - 抖音短链返回 `Fresh cookies are needed`
 - B站返回 `HTTP Error 412: Precondition Failed`
 
-这不是输入框或前端问题，而是平台要求请求携带新鲜的游客 Cookie 或用户主动提供的 Cookie。为了安全，本项目不会自动读取你的浏览器 Cookie。需要解析这类链接时，请你主动导出 `cookies.txt`，然后配置：
+这不是输入框或前端问题，而是平台要求请求携带新鲜的游客 Cookie 或用户主动提供的 Cookie。下载解析链路默认优先使用公开页面、平台公开接口和后端兜底解析；需要解析必须登录态的内容时，仍建议由用户主动导出 `cookies.txt`，然后配置：
 
 ```powershell
 $env:YTDLP_COOKIE_FILE="C:\path\to\cookies.txt"

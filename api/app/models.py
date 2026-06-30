@@ -102,3 +102,50 @@ class BillingPlan(BaseModel):
 
 class BillingPlansResponse(BaseModel):
     plans: list[BillingPlan]
+
+
+class TranscriptSegment(BaseModel):
+    start: float
+    end: float | None = None
+    text: str
+
+
+class AiOutlineItem(BaseModel):
+    title: str
+    start: float | None = None
+    summary: str
+
+
+class AiAnalysisRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=3000)
+    format_id: str = Field(default="best", min_length=1, max_length=120)
+    language: str = Field(default="zh", min_length=2, max_length=16)
+
+    @field_validator("url")
+    @classmethod
+    def extract_first_url(cls, value: str) -> str:
+        return ProbeRequest.extract_first_url(value)
+
+
+class AiAnalysisResponse(BaseModel):
+    analysis_id: str
+    title: str
+    source_url: str
+    summary: str
+    outline: list[AiOutlineItem]
+    key_points: list[str]
+    transcript_segments: list[TranscriptSegment]
+    suggested_questions: list[str]
+    model: str
+    created_at: str
+
+
+class AiChatRequest(BaseModel):
+    analysis_id: str = Field(min_length=1, max_length=80)
+    question: str = Field(min_length=1, max_length=1000)
+
+
+class AiChatResponse(BaseModel):
+    answer: str
+    related_segments: list[TranscriptSegment]
+    model: str

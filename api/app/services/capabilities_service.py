@@ -19,6 +19,12 @@ def get_capabilities() -> CapabilitiesResponse:
                 description="页面针对移动端做了输入、结果卡片和弹窗适配。",
             ),
             CapabilityItem(
+                key="ai_video_analysis",
+                title="AI 视频分析",
+                status="available",
+                description="解析视频后提取平台字幕，并通过 DeepSeek 生成摘要、大纲、知识点和视频问答。",
+            ),
+            CapabilityItem(
                 key="batch_download",
                 title="批量下载",
                 status="coming_soon",
