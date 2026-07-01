@@ -39,3 +39,19 @@ async def analyze_video_stream(payload: AiAnalysisRequest) -> StreamingResponse:
 @router.post("/chat", response_model=AiChatResponse)
 async def chat_with_video(payload: AiChatRequest) -> AiChatResponse:
     return await ai_analysis_service.chat(payload.analysis_id, payload.question)
+
+
+@router.post("/chat-stream")
+async def chat_with_video_stream(payload: AiChatRequest) -> StreamingResponse:
+    async def event_stream() -> AsyncIterator[str]:
+        try:
+            async for event in ai_analysis_service.chat_stream(payload.analysis_id, payload.question):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except HTTPException as exc:
+            event = {"type": "error", "status_code": exc.status_code, "message": exc.detail}
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception:
+            event = {"type": "error", "status_code": 500, "message": "AI 问答失败，请稍后重试。"}
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")

@@ -1,4 +1,12 @@
-import type { AiAnalysisResponse, AiAnalysisStreamEvent, AiChatResponse, BillingPlan, ComingSoonResponse, ProbeResponse } from "./types";
+import type {
+  AiAnalysisResponse,
+  AiAnalysisStreamEvent,
+  AiChatResponse,
+  AiChatStreamEvent,
+  BillingPlan,
+  ComingSoonResponse,
+  ProbeResponse,
+} from "./types";
 
 async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(path, {
@@ -112,4 +120,56 @@ export function chatWithVideo(analysisId: string, question: string) {
     method: "POST",
     body: JSON.stringify({ analysis_id: analysisId, question }),
   });
+}
+
+export async function chatWithVideoStream(
+  analysisId: string,
+  question: string,
+  onEvent: (event: AiChatStreamEvent) => void,
+) {
+  const response = await fetch("/api/ai/chat-stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ analysis_id: analysisId, question }),
+  });
+
+  if (!response.ok || !response.body) {
+    if (response.status === 404) {
+      const result = await chatWithVideo(analysisId, question);
+      onEvent({ type: "answer_delta", delta: result.answer });
+      onEvent({ type: "complete", answer: result.answer, related_segments: result.related_segments, model: result.model });
+      return;
+    }
+    const payload = await response.json().catch(() => ({}));
+    const detail = typeof payload.detail === "string" ? payload.detail : "AI 问答失败，请稍后重试。";
+    throw new Error(detail);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
+
+    for (const part of parts) {
+      const dataLine = part
+        .split("\n")
+        .map((line) => line.trim())
+        .find((line) => line.startsWith("data:"));
+      if (!dataLine) continue;
+      const raw = dataLine.slice(5).trim();
+      if (!raw) continue;
+      onEvent(JSON.parse(raw) as AiChatStreamEvent);
+    }
+  }
+
+  const tail = buffer.trim();
+  if (tail.startsWith("data:")) {
+    onEvent(JSON.parse(tail.slice(5).trim()) as AiChatStreamEvent);
+  }
 }

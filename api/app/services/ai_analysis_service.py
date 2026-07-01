@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -33,13 +34,13 @@ class AiAnalysisService:
     async def analyze(self, url: str, language: str = "zh") -> AiAnalysisResponse:
         title, segments = await subtitle_service.extract(url, language)
         transcript_text = self._segments_to_text(segments)
-        ai_payload = await self._analyze_transcript(title, transcript_text)
+        ai_payload = await self._summarize_transcript(title, transcript_text)
         response = self._build_response(url, title, segments, ai_payload)
         self._cache_response(response, transcript_text)
         return response
 
     async def analyze_stream(self, url: str, language: str = "zh") -> AsyncIterator[dict[str, Any]]:
-        yield {"type": "status", "message": "正在提取平台字幕..."}
+        yield {"type": "status", "message": "AI 正在读取视频字幕..."}
         title, segments = await subtitle_service.extract(url, language)
         transcript_text = self._segments_to_text(segments)
         yield {
@@ -49,18 +50,14 @@ class AiAnalysisService:
             "transcript_segments": [segment.model_dump() for segment in segments],
         }
 
-        yield {"type": "status", "message": "正在流式生成视频总结..."}
-        summary_parts: list[str] = []
-        async for chunk in self._stream_summary(title, transcript_text):
-            summary_parts.append(chunk)
+        yield {"type": "status", "message": "AI 正在总结视频重点..."}
+        note_parts: list[str] = []
+        async for chunk in self._stream_learning_note(title, transcript_text):
+            note_parts.append(chunk)
             yield {"type": "summary_delta", "delta": chunk}
 
-        yield {"type": "status", "message": "正在整理章节大纲、知识点和问答上下文..."}
-        ai_payload = await self._analyze_transcript(title, transcript_text)
-        streamed_summary = "".join(summary_parts).strip()
-        if streamed_summary:
-            ai_payload["summary"] = streamed_summary
-
+        streamed_note = self._normalize_outline_markdown("".join(note_parts).strip())
+        ai_payload = self._payload_from_markdown_note(streamed_note)
         response = self._build_response(url, title, segments, ai_payload)
         self._cache_response(response, transcript_text)
         yield {"type": "complete", "analysis": response.model_dump()}
@@ -72,10 +69,10 @@ class AiAnalysisService:
             {
                 "role": "system",
                 "content": (
-                    "你是视频学习助手。只能基于给定的视频摘要、知识点和字幕回答，"
+                    "你是视频学习助手。只能基于给定的视频摘要和字幕回答，"
                     "不要编造视频中没有的信息。回答要简洁、中文、适合学习复盘。"
                     "如果用户要求多个要点、步骤或原因，必须按要求分条回答，"
-                    "并优先使用已给出的核心知识点。"
+                    "并尽量引用字幕中的关键信息。"
                 ),
             },
             {
@@ -83,7 +80,6 @@ class AiAnalysisService:
                 "content": (
                     f"视频标题：{cached.response.title}\n"
                     f"摘要：{cached.response.summary}\n"
-                    f"核心知识点：{'; '.join(cached.response.key_points)}\n"
                     f"相关字幕：\n{self._segments_to_text(related or cached.response.transcript_segments[:30])}\n"
                     f"问题：{question}\n"
                     "请直接回答问题；如果问题要求多个要点，请使用编号列表。"
@@ -93,55 +89,76 @@ class AiAnalysisService:
         answer = await deepseek_client.complete_text(messages)
         return AiChatResponse(answer=answer, related_segments=related, model=get_settings().deepseek_model)
 
-    async def _analyze_transcript(self, title: str, transcript_text: str) -> dict[str, Any]:
-        max_chars = get_settings().ai_max_transcript_chars
-        if len(transcript_text) <= max_chars:
-            return await self._request_analysis(title, transcript_text)
-
-        chunks = self._chunk_text(transcript_text, max_chars)
-        chunk_summaries: list[str] = []
-        for index, chunk in enumerate(chunks, start=1):
-            payload = await self._request_analysis(f"{title} - 片段 {index}", chunk)
-            chunk_summaries.append(
-                f"片段 {index}\n摘要：{payload.get('summary', '')}\n知识点：{'；'.join(payload.get('key_points') or [])}"
-            )
-        return await self._request_analysis(title, "\n\n".join(chunk_summaries))
-
-    async def _request_analysis(self, title: str, transcript_text: str) -> dict[str, Any]:
+    async def chat_stream(self, analysis_id: str, question: str) -> AsyncIterator[dict[str, Any]]:
+        cached = self._get_cached(analysis_id)
+        related = self._related_segments(cached.response.transcript_segments, question)
+        yield {"type": "related_segments", "related_segments": [segment.model_dump() for segment in related]}
         messages = [
             {
                 "role": "system",
                 "content": (
-                    "你是专业的视频学习助手。请严格输出 JSON，不要输出 Markdown。"
-                    "JSON 必须包含 summary 字符串、outline 数组、key_points 字符串数组、"
-                    "suggested_questions 字符串数组。outline 每项包含 title、start、summary。"
-                    "只基于字幕内容总结，不要编造。"
+                    "你是视频学习助手。只能基于给定的视频摘要和字幕回答，"
+                    "不要编造视频中没有的信息。回答要简洁、中文、适合学习复盘。"
+                    "如果用户要求多个要点、步骤或原因，必须按要求分条回答。"
                 ),
             },
             {
                 "role": "user",
                 "content": (
-                    f"请分析这个视频，输出中文学习笔记。\n"
-                    f"视频标题：{title}\n"
-                    f"字幕内容：\n{transcript_text}"
+                    f"视频标题：{cached.response.title}\n"
+                    f"摘要：{cached.response.summary}\n"
+                    f"相关字幕：\n{self._segments_to_text(related or cached.response.transcript_segments[:30])}\n"
+                    f"问题：{question}\n"
+                    "请直接回答问题；如果问题要求多个要点，请使用编号列表。"
                 ),
             },
         ]
+        parts: list[str] = []
+        async for chunk in deepseek_client.stream_text(messages):
+            parts.append(chunk)
+            yield {"type": "answer_delta", "delta": chunk}
+        yield {
+            "type": "complete",
+            "answer": "".join(parts).strip(),
+            "related_segments": [segment.model_dump() for segment in related],
+            "model": get_settings().deepseek_model,
+        }
 
-        try:
-            return await deepseek_client.complete_json(messages)
-        except HTTPException as first_error:
-            if first_error.status_code != 502:
-                raise
-            return await deepseek_client.complete_json(messages)
+    async def _summarize_transcript(self, title: str, transcript_text: str) -> dict[str, Any]:
+        max_chars = get_settings().ai_max_transcript_chars
+        if len(transcript_text) <= max_chars:
+            parts = [chunk async for chunk in self._stream_learning_note(title, transcript_text)]
+            note = "".join(parts).strip()
+            if not note:
+                raise HTTPException(status_code=502, detail="AI 返回内容缺少摘要，请稍后重试。")
+            return self._payload_from_markdown_note(self._normalize_outline_markdown(note))
 
-    async def _stream_summary(self, title: str, transcript_text: str) -> AsyncIterator[str]:
+        chunks = self._chunk_text(transcript_text, max_chars)
+        chunk_summaries: list[str] = []
+        for index, chunk in enumerate(chunks, start=1):
+            parts = [part async for part in self._stream_learning_note(f"{title} - 片段 {index}", chunk)]
+            chunk_summaries.append(f"片段 {index}\n{''.join(parts).strip()}")
+        parts = [part async for part in self._stream_learning_note(title, "\n\n".join(chunk_summaries))]
+        note = "".join(parts).strip()
+        if not note:
+            raise HTTPException(status_code=502, detail="AI 返回内容缺少摘要，请稍后重试。")
+        return self._payload_from_markdown_note(self._normalize_outline_markdown(note))
+
+    async def _stream_learning_note(self, title: str, transcript_text: str) -> AsyncIterator[str]:
         messages = [
             {
                 "role": "system",
                 "content": (
-                    "你是专业的视频学习助手。请用中文流式输出一段视频总结，"
-                    "聚焦学习效率、核心观点和可复盘内容。只能基于字幕，不要编造。"
+                    "你是专业的视频内容整理助手。请用中文流式输出通用 Markdown 摘要。"
+                    "用户解析的视频可能是学习、技术、美食、旅游、生活、娱乐等任意内容，"
+                    "所以不要固定写成学习笔记。只能基于字幕，不要编造。"
+                    "必须包含以下二级标题：## 视频概述、## 内容大纲。"
+                    "视频概述用 1 到 2 个短段落说明视频主要内容，避免冗长。"
+                    "内容大纲要精简，最多 5 个一级模块；每个模块最多 3 个子项。"
+                    "内容大纲使用标准 Markdown：一级条目用 `1. **功能点**`，不要带时间戳；"
+                    "子项必须缩进两个空格并统一用 `  - **功能名**：解释`，必要时才用四个空格的三级缩进 `    - 细节`。"
+                    "不要使用 `•`、`·`、`●`。关键信息、功能名、核心术语用 ** ** 加粗。"
+                    "不要输出 JSON。"
                 ),
             },
             {
@@ -149,12 +166,114 @@ class AiAnalysisService:
                 "content": (
                     f"视频标题：{title}\n"
                     f"字幕内容：\n{transcript_text[: get_settings().ai_max_transcript_chars]}\n\n"
-                    "请直接输出总结正文，不要输出标题、Markdown 或 JSON。"
+                    "请直接输出 Markdown，不要输出 JSON，不要解释你的生成过程。"
                 ),
             },
         ]
-        async for chunk in deepseek_client.stream_text(messages, max_tokens=1200):
+        async for chunk in deepseek_client.stream_text(messages, max_tokens=2400):
             yield chunk
+
+    def _payload_from_markdown_note(self, note: str) -> dict[str, Any]:
+        summary_section = self._extract_first_markdown_section(note, ["视频概述", "视频总结"]) or note
+        outline_section = self._extract_first_markdown_section(note, ["内容大纲", "章节大纲"])
+        key_points_section = self._extract_first_markdown_section(note, ["核心知识点", "重点内容"])
+        questions_section = self._extract_first_markdown_section(note, ["可追问问题", "延伸问题"])
+        return {
+            "summary": note,
+            "outline": self._parse_outline_section(outline_section),
+            "key_points": self._parse_list_section(key_points_section),
+            "suggested_questions": self._parse_list_section(questions_section),
+            "plain_summary": summary_section.strip(),
+        }
+
+    def _normalize_outline_markdown(self, note: str) -> str:
+        lines: list[str] = []
+        in_outline = False
+        for raw_line in note.replace("\r\n", "\n").split("\n"):
+            stripped = raw_line.strip()
+            if stripped.startswith("## "):
+                in_outline = stripped.lstrip("#").strip() in {"内容大纲", "章节大纲"}
+                lines.append(raw_line.rstrip())
+                continue
+            line = re.sub(r"^(\s*)[•·●]\s+", r"\1- ", raw_line)
+            if in_outline:
+                line = re.sub(r"\s*\[\d{1,2}:\d{2}(?::\d{2})?\]", "", line)
+            lines.append(line.rstrip())
+        return "\n".join(lines).strip()
+
+    def _extract_first_markdown_section(self, markdown: str, headings: list[str]) -> str:
+        for heading in headings:
+            section = self._extract_markdown_section(markdown, heading)
+            if section:
+                return section
+        return ""
+
+    def _extract_markdown_section(self, markdown: str, heading: str) -> str:
+        lines = markdown.replace("\r\n", "\n").split("\n")
+        collected: list[str] = []
+        in_section = False
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("## "):
+                current_heading = stripped.lstrip("#").strip()
+                if in_section:
+                    break
+                in_section = current_heading == heading
+                continue
+            if in_section:
+                collected.append(line)
+        return "\n".join(collected).strip()
+
+    def _parse_list_section(self, section: str) -> list[str]:
+        items: list[str] = []
+        for raw_line in section.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            line = line.lstrip("-* ").strip()
+            if len(line) > 2 and line[0].isdigit():
+                line = line.split(".", 1)[-1].split(")", 1)[-1].strip()
+            if line:
+                items.append(line)
+        return items[:8]
+
+    def _parse_outline_section(self, section: str) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        for raw_line in section.splitlines():
+            line = raw_line.strip().lstrip("-* ").strip()
+            if not line:
+                continue
+            if len(line) > 2 and line[0].isdigit():
+                line = line.split(".", 1)[-1].split(")", 1)[-1].strip()
+            start = None
+            time_match = re.search(r"\[(\d{1,2}:\d{2}(?::\d{2})?)\]", line)
+            if time_match:
+                start = self._parse_timestamp(time_match.group(1))
+                line = line.replace(time_match.group(0), "").strip()
+            if "：" in line:
+                title, summary = line.split("：", 1)
+            elif ":" in line:
+                title, summary = line.split(":", 1)
+            else:
+                title, summary = line, ""
+            title = title.replace("**", "").replace("__", "").strip()
+            summary = summary.replace("**", "").replace("__", "").strip()
+            items.append({"title": title.strip() or "章节", "start": start, "summary": summary.strip()})
+        return items[:8]
+
+    def _parse_timestamp(self, value: str) -> float | None:
+        parts = value.split(":")
+        try:
+            numbers = [int(part) for part in parts]
+        except ValueError:
+            return None
+        if len(numbers) == 2:
+            minutes, seconds = numbers
+            return float(minutes * 60 + seconds)
+        if len(numbers) == 3:
+            hours, minutes, seconds = numbers
+            return float(hours * 3600 + minutes * 60 + seconds)
+        return None
 
     def _cache_response(self, response: AiAnalysisResponse, transcript_text: str) -> None:
         self._cache[response.analysis_id] = CachedAnalysis(

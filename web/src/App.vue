@@ -6,11 +6,16 @@ import {
   BrainCircuit,
   Captions,
   Check,
+  ChevronDown,
   ChevronRight,
   ClipboardCopy,
   Crown,
+  Download,
+  FileText,
+  ImageDown,
   Languages,
   Loader2,
+  Maximize2,
   MessageCircle,
   LockKeyhole,
   Play,
@@ -18,10 +23,11 @@ import {
   Send,
   Sparkles,
   WandSparkles,
+  X,
   Zap,
 } from "lucide-vue-next";
 import { computed, onMounted, ref } from "vue";
-import { analyzeVideoStream, chatWithVideo, fetchPlans, probeVideo, requestComingSoon, startDownload } from "./api";
+import { analyzeVideoStream, chatWithVideoStream, fetchPlans, probeVideo, requestComingSoon, startDownload } from "./api";
 import type { AiAnalysisResponse, AiChatMessage, BillingPlan, ProbeResponse } from "./types";
 
 const videoUrl = ref("");
@@ -34,13 +40,29 @@ const showPlans = ref(false);
 const showToast = ref(false);
 const toastText = ref("");
 const aiStatus = ref<"idle" | "analyzing" | "ready" | "error">("idle");
-const aiMessage = ref("解析视频后，可提取平台字幕并生成 AI 学习笔记。");
+const aiMessage = ref("解析视频后，可提取平台字幕并生成 AI 内容摘要。");
 const aiResult = ref<AiAnalysisResponse | null>(null);
 const aiStreamingSummary = ref("");
 const aiActiveTab = ref<"summary" | "transcript" | "mindmap" | "chat">("summary");
 const aiQuestion = ref("");
 const aiChatStatus = ref<"idle" | "asking">("idle");
 const aiChatHistory = ref<AiChatMessage[]>([]);
+const showSubtitleMenu = ref(false);
+const showMindMapLightbox = ref(false);
+
+type MarkdownBlock =
+  | { type: "heading"; level: 2 | 3 | 4; text: string }
+  | { type: "paragraph"; html: string }
+  | { type: "quote"; html: string }
+  | { type: "list"; ordered: boolean; items: string[]; start?: number; nested?: boolean }
+  | { type: "code"; text: string };
+
+interface MindMapNode {
+  title: string;
+  start?: number | null;
+  summary: string;
+  children: string[];
+}
 
 const canProbe = computed(() => videoUrl.value.trim().length > 5 && status.value !== "probing");
 const activeFormat = computed(() => selectedFormat.value || probeResult.value?.recommended_format_id || "best");
@@ -66,6 +88,17 @@ const transcriptText = computed(() => {
     .map((segment) => `[${formatTimestamp(segment.start)}] ${segment.text}`)
     .join("\n");
 });
+const summaryBlocks = computed(() => parseMarkdown(aiResult.value?.summary || aiStreamingSummary.value));
+const mindMapNodes = computed(() => (aiResult.value ? buildMindMapNodes(aiResult.value) : []));
+const mindMapSvg = computed(() => (aiResult.value ? buildMindMapSvg(aiResult.value, mindMapNodes.value) : ""));
+const mindMapDataUrl = computed(() => {
+  if (!mindMapSvg.value) return "";
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(mindMapSvg.value)}`;
+});
+const chatQuestionOptions = computed(() => {
+  const suggested = aiResult.value?.suggested_questions.filter(Boolean) ?? [];
+  return (suggested.length ? suggested : quickChatQuestions).slice(0, 3);
+});
 
 const platformCards = [
   { title: "公开课程", tag: "学习复盘", tone: "bg-coral/12 text-coral", desc: "把公开课程和讲座保存到本地，通勤路上也能看。" },
@@ -88,6 +121,7 @@ const aiTabs = [
   { key: "mindmap", label: "思维导图", icon: BrainCircuit },
   { key: "chat", label: "AI 问答", icon: MessageCircle },
 ] as const;
+const quickChatQuestions = ["这个视频主要讲了什么？", "帮我提炼适合复习的重点", "有哪些容易混淆的地方？"];
 
 function formatDuration(seconds?: number | null) {
   if (!seconds) return "未知时长";
@@ -108,6 +142,389 @@ function formatTimestamp(seconds?: number | null) {
   const minutes = Math.floor(total / 60);
   const rest = total % 60;
   return `${minutes}:${String(rest).padStart(2, "0")}`;
+}
+
+function formatSubtitleTimestamp(seconds: number, separator: "," | ".") {
+  const safeSeconds = Math.max(0, seconds || 0);
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.floor((safeSeconds % 3600) / 60);
+  const wholeSeconds = Math.floor(safeSeconds % 60);
+  const milliseconds = Math.floor((safeSeconds - Math.floor(safeSeconds)) * 1000);
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(wholeSeconds).padStart(2, "0")}${separator}${String(milliseconds).padStart(3, "0")}`;
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function escapeXml(value: string) {
+  return escapeHtml(value);
+}
+
+function renderInlineMarkdown(value: string) {
+  return escapeHtml(value)
+    .replace(/`([^`]+)`/g, '<code class="rounded bg-ink/8 px-1.5 py-0.5 text-[0.92em] font-bold text-ink">$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong class="font-black text-ink">$1</strong>')
+    .replace(/__([^_]+)__/g, '<strong class="font-black text-ink">$1</strong>');
+}
+
+function parseMarkdown(markdown: string): MarkdownBlock[] {
+  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+  const blocks: MarkdownBlock[] = [];
+  let paragraph: string[] = [];
+  let listItems: string[] = [];
+  let listOrdered = false;
+  let listStart = 1;
+  let listNested = false;
+  let orderedSequence = 0;
+  let codeLines: string[] = [];
+  let inCode = false;
+
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    blocks.push({ type: "paragraph", html: renderInlineMarkdown(paragraph.join(" ")) });
+    paragraph = [];
+  };
+  const flushList = () => {
+    if (!listItems.length) return;
+    blocks.push({
+      type: "list",
+      ordered: listOrdered,
+      items: listItems.map(renderInlineMarkdown),
+      start: listOrdered ? listStart : undefined,
+      nested: listNested,
+    });
+    listItems = [];
+    listNested = false;
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    const indent = rawLine.match(/^\s*/)?.[0].length ?? 0;
+    if (line.startsWith("```")) {
+      if (inCode) {
+        blocks.push({ type: "code", text: codeLines.join("\n") });
+        codeLines = [];
+        inCode = false;
+      } else {
+        flushParagraph();
+        flushList();
+        inCode = true;
+      }
+      continue;
+    }
+    if (inCode) {
+      codeLines.push(rawLine);
+      continue;
+    }
+    if (!line) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+
+    const heading = /^(#{1,4})\s+(.+)$/.exec(line);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      blocks.push({
+        type: "heading",
+        level: Math.min(4, Math.max(2, heading[1].length + 1)) as 2 | 3 | 4,
+        text: heading[2],
+      });
+      continue;
+    }
+
+    if (line.startsWith(">")) {
+      flushParagraph();
+      flushList();
+      blocks.push({ type: "quote", html: renderInlineMarkdown(line.replace(/^>\s?/, "")) });
+      continue;
+    }
+
+    const bullet = /^[-*•·●]\s+(.+)$/.exec(line);
+    const ordered = /^(\d+)[.)]\s+(.+)$/.exec(line);
+    if (bullet || ordered) {
+      flushParagraph();
+      const orderedNow = Boolean(ordered);
+      if (listItems.length && listOrdered !== orderedNow) flushList();
+      listOrdered = orderedNow;
+      if (ordered) {
+        const rawStart = Number(ordered[1]);
+        if (!listItems.length) {
+          listStart = rawStart > orderedSequence ? rawStart : orderedSequence + 1;
+          listNested = false;
+          orderedSequence = listStart;
+        } else {
+          orderedSequence += 1;
+        }
+        listItems.push(ordered[2]);
+      } else {
+        if (!listItems.length) {
+          const previousBlock = blocks[blocks.length - 1];
+          listNested = indent > 0 || (previousBlock?.type === "list" && previousBlock.ordered);
+        }
+        listItems.push(bullet?.[1] ?? line);
+      }
+      continue;
+    }
+
+    flushList();
+    paragraph.push(line);
+  }
+
+  flushParagraph();
+  flushList();
+  if (inCode || codeLines.length) blocks.push({ type: "code", text: codeLines.join("\n") });
+  return blocks;
+}
+
+function wrapText(value: string, limit: number, maxLines = 4) {
+  const text = value.replace(/\s+/g, " ").trim();
+  if (!text) return [""];
+  const lines: string[] = [];
+  let current = "";
+  for (const char of text) {
+    if ((current + char).length > limit) {
+      lines.push(current);
+      current = char;
+    } else {
+      current += char;
+    }
+  }
+  if (current) lines.push(current);
+  const visible = lines.slice(0, maxLines);
+  if (lines.length > maxLines) {
+    visible[maxLines - 1] = `${visible[maxLines - 1].slice(0, Math.max(1, limit - 1))}…`;
+  }
+  return visible;
+}
+
+function svgTextLines(
+  text: string,
+  x: number,
+  y: number,
+  maxChars: number,
+  size = 24,
+  weight = 800,
+  color = "#161612",
+  anchor: "start" | "middle" | "end" = "start",
+  maxLines = 3,
+) {
+  return wrapText(text, maxChars, maxLines)
+    .map((line, index) => `<text x="${x}" y="${y + index * (size + 8)}" text-anchor="${anchor}" font-size="${size}" font-weight="${weight}" fill="${color}" font-family="Inter, Arial, sans-serif">${escapeXml(line)}</text>`)
+    .join("");
+}
+
+function conciseText(value: string, maxLength = 30) {
+  const text = value.replace(/\s+/g, " ").trim();
+  if (text.length <= maxLength) return text;
+  const sentence = text.split(/[。！？.!?；;]/)[0]?.trim();
+  const picked = sentence && sentence.length >= 4 ? sentence : text;
+  return picked.length > maxLength ? `${picked.slice(0, maxLength)}…` : picked;
+}
+
+function buildMindMapNodes(analysis: AiAnalysisResponse): MindMapNode[] {
+  if (analysis.outline.length) {
+    return analysis.outline.slice(0, 8).map((item) => ({
+      title: conciseText(item.title, 22),
+      start: item.start,
+      summary: conciseText(item.summary, 42),
+      children: item.summary ? wrapText(item.summary, 16, 2).filter(Boolean) : [],
+    }));
+  }
+
+  const segments = analysis.transcript_segments;
+  if (!segments.length) {
+    return [{ title: "暂无字幕内容", summary: "生成摘要后可查看导图", children: [] }];
+  }
+
+  const groupCount = Math.min(6, Math.max(3, Math.ceil(segments.length / 18)));
+  const groupSize = Math.ceil(segments.length / groupCount);
+  const nodes: MindMapNode[] = [];
+  for (let index = 0; index < groupCount; index += 1) {
+    const group = segments.slice(index * groupSize, (index + 1) * groupSize);
+    if (!group.length) continue;
+    const title = conciseText(group[0].text, 18);
+    const childSource = group.filter((_, itemIndex) => itemIndex % Math.max(1, Math.floor(group.length / 3)) === 0).slice(0, 3);
+    nodes.push({
+      title,
+      start: group[0].start,
+      summary: conciseText(group.map((segment) => segment.text).join(" "), 42),
+      children: childSource.map((segment) => conciseText(segment.text, 14)),
+    });
+  }
+  return nodes;
+}
+
+function svgBranchLabel(
+  text: string,
+  x: number,
+  y: number,
+  side: "left" | "right",
+  color: string,
+  size = 26,
+  maxChars = 13,
+) {
+  const anchor = side === "left" ? "end" : "start";
+  const underlineEnd = side === "left" ? x - 250 : x + 250;
+  return `
+    <line x1="${x}" y1="${y + 10}" x2="${underlineEnd}" y2="${y + 10}" stroke="${color}" stroke-width="3" stroke-linecap="round" opacity="0.75"/>
+    ${svgTextLines(text, x, y, maxChars, size, 700, "#4d4a45", anchor, 2)}
+  `;
+}
+
+function buildMindMapSvg(analysis: AiAnalysisResponse, nodes: MindMapNode[]) {
+  const visibleNodes = nodes.slice(0, 8);
+  const leftNodes = visibleNodes.filter((_, index) => index % 2 === 1);
+  const rightNodes = visibleNodes.filter((_, index) => index % 2 === 0);
+  const rows = Math.max(leftNodes.length, rightNodes.length, 3);
+  const width = 2200;
+  const height = Math.max(1080, rows * 280 + 320);
+  const centerX = 1100;
+  const centerY = Math.round(height / 2);
+  const palette = ["#2f80ed", "#27b6bd", "#7c5cff", "#e05243", "#d98b25", "#7aa833", "#a35aa8", "#8b5a42"];
+
+  const renderSide = (sideNodes: MindMapNode[], side: "left" | "right") => {
+    const isLeft = side === "left";
+    const branchX = isLeft ? centerX - 410 : centerX + 410;
+    const labelX = isLeft ? branchX - 70 : branchX + 70;
+    const startY = centerY - ((sideNodes.length - 1) * 250) / 2;
+    return sideNodes
+      .map((node, sideIndex) => {
+        const globalIndex = visibleNodes.indexOf(node);
+        const color = palette[globalIndex % palette.length];
+        const y = startY + sideIndex * 250;
+        const c1x = isLeft ? centerX - 190 : centerX + 190;
+        const c2x = isLeft ? branchX + 150 : branchX - 150;
+        const childBaseX = isLeft ? labelX - 330 : labelX + 330;
+        const children = node.children.slice(0, 4).map((child, childIndex) => {
+          const childY = y + 66 + childIndex * 62;
+          const curveEndX = isLeft ? childBaseX + 38 : childBaseX - 38;
+          return `
+            <path d="M ${labelX} ${y + 16} C ${isLeft ? labelX - 92 : labelX + 92} ${y + 58}, ${isLeft ? curveEndX + 92 : curveEndX - 92} ${childY}, ${curveEndX} ${childY}" stroke="${color}" stroke-width="2.5" fill="none" opacity="0.6"/>
+            <circle cx="${curveEndX}" cy="${childY}" r="8" fill="#fffaf0" stroke="${color}" stroke-width="4"/>
+            ${svgBranchLabel(child, childBaseX, childY - 8, side, color, 22, 11)}
+          `;
+        });
+        return `
+          <path d="M ${centerX} ${centerY} C ${c1x} ${centerY}, ${c2x} ${y}, ${branchX} ${y}" stroke="${color}" stroke-width="4" fill="none" stroke-linecap="round"/>
+          <circle cx="${branchX}" cy="${y}" r="12" fill="#fffaf0" stroke="${color}" stroke-width="5"/>
+          ${svgBranchLabel(node.title, labelX, y - 8, side, color, 28, 14)}
+          <text x="${isLeft ? labelX - 118 : labelX + 118}" y="${y + 44}" text-anchor="${isLeft ? "end" : "start"}" font-size="18" font-weight="800" fill="${color}" font-family="Inter, Arial, sans-serif">${node.start === null || node.start === undefined ? "" : formatTimestamp(node.start)}</text>
+          ${children.join("")}
+        `;
+      })
+      .join("");
+  };
+
+  return `
+<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#fffaf0"/>
+      <stop offset="52%" stop-color="#fffdf8"/>
+      <stop offset="100%" stop-color="#eef9ff"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#161612" flood-opacity="0.12"/>
+    </filter>
+  </defs>
+  <rect width="100%" height="100%" fill="url(#bg)"/>
+  <circle cx="280" cy="160" r="230" fill="#ff6b5f" fill-opacity="0.10"/>
+  <circle cx="1900" cy="170" r="270" fill="#5bc0eb" fill-opacity="0.14"/>
+  <g filter="url(#shadow)">
+    <rect x="${centerX - 250}" y="${centerY - 96}" width="500" height="192" rx="42" fill="#ffffff"/>
+    <text x="${centerX}" y="${centerY - 34}" text-anchor="middle" font-size="24" font-weight="900" fill="#7c5cff" font-family="Inter, Arial, sans-serif">视频主题</text>
+    ${svgTextLines(analysis.title, centerX, centerY + 10, 16, 30, 900, "#161612", "middle", 2)}
+  </g>
+  ${renderSide(leftNodes, "left")}
+  ${renderSide(rightNodes, "right")}
+</svg>`.trim();
+}
+
+function sanitizeFilename(value: string) {
+  return value.replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim().slice(0, 80) || "video";
+}
+
+function downloadBlob(content: BlobPart, filename: string, type: string) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 500);
+}
+
+function buildSubtitle(format: "srt" | "vtt" | "txt") {
+  if (!aiResult.value) return "";
+  const segments = aiResult.value.transcript_segments;
+  if (format === "txt") return transcriptText.value;
+  const body = segments
+    .map((segment, index) => {
+      const end = segment.end ?? segments[index + 1]?.start ?? segment.start + 3;
+      if (format === "vtt") {
+        return `${formatSubtitleTimestamp(segment.start, ".")} --> ${formatSubtitleTimestamp(end, ".")}\n${segment.text}`;
+      }
+      return `${index + 1}\n${formatSubtitleTimestamp(segment.start, ",")} --> ${formatSubtitleTimestamp(end, ",")}\n${segment.text}`;
+    })
+    .join("\n\n");
+  return format === "vtt" ? `WEBVTT\n\n${body}\n` : `${body}\n`;
+}
+
+function downloadSubtitle(format: "srt" | "vtt" | "txt") {
+  if (!aiResult.value) return;
+  const filename = `${sanitizeFilename(aiResult.value.title)}.${format}`;
+  const contentType = format === "txt" ? "text/plain;charset=utf-8" : `text/${format};charset=utf-8`;
+  downloadBlob(buildSubtitle(format), filename, contentType);
+  showSubtitleMenu.value = false;
+  showNotice(`已生成 ${format.toUpperCase()} 字幕文件。`);
+}
+
+async function downloadMindMapPng() {
+  if (!aiResult.value || !mindMapSvg.value) return;
+  const image = new Image();
+  image.decoding = "async";
+  const svgUrl = URL.createObjectURL(new Blob([mindMapSvg.value], { type: "image/svg+xml;charset=utf-8" }));
+  try {
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error("思维导图图片生成失败，请稍后重试。"));
+      image.src = svgUrl;
+    });
+    const scale = 2;
+    const canvas = document.createElement("canvas");
+    canvas.width = image.naturalWidth * scale;
+    canvas.height = image.naturalHeight * scale;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("当前浏览器不支持图片导出。");
+    context.fillStyle = "#fffaf0";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png", 1));
+    if (!blob) throw new Error("思维导图图片生成失败，请稍后重试。");
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${sanitizeFilename(aiResult.value.title)}-mindmap.png`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 500);
+    showNotice("高清思维导图已开始下载。");
+  } catch (error) {
+    showNotice(error instanceof Error ? error.message : "思维导图图片生成失败，请稍后重试。");
+  } finally {
+    URL.revokeObjectURL(svgUrl);
+  }
 }
 
 async function pasteFromClipboard() {
@@ -133,7 +550,7 @@ async function handleProbe() {
     aiResult.value = null;
     aiStreamingSummary.value = "";
     aiChatHistory.value = [];
-    aiMessage.value = "解析成功后，可继续生成 AI 学习笔记。";
+    aiMessage.value = "解析成功后，可继续生成 AI 内容摘要。";
     status.value = "ready";
     message.value = "解析成功，选择格式后即可下载。";
   } catch (error) {
@@ -166,7 +583,7 @@ async function handleDownload() {
 
 async function handleAnalyze() {
   if (!probeResult.value) {
-    showNotice("请先解析一个视频，再生成 AI 学习笔记。");
+    showNotice("请先解析一个视频，再生成 AI 内容摘要。");
     return;
   }
 
@@ -194,9 +611,9 @@ async function handleAnalyze() {
       }
       if (event.type === "complete") {
         aiResult.value = event.analysis;
-        aiStreamingSummary.value = event.analysis.summary || aiStreamingSummary.value;
+    aiStreamingSummary.value = event.analysis.summary || aiStreamingSummary.value;
         aiStatus.value = "ready";
-        aiMessage.value = "AI 学习笔记已生成，可继续追问视频内容。";
+        aiMessage.value = "视频总结已生成，字幕、思维导图和 AI 问答已可使用。";
         return;
       }
       if (event.type === "error") {
@@ -207,7 +624,7 @@ async function handleAnalyze() {
       throw new Error("AI 分析没有返回完整结果，请稍后重试。");
     }
     aiStatus.value = "ready";
-    aiMessage.value = "AI 学习笔记已生成，可继续追问视频内容。";
+    aiMessage.value = "视频总结已生成，字幕、思维导图和 AI 问答已可使用。";
   } catch (error) {
     aiStatus.value = "error";
     aiMessage.value = error instanceof Error ? error.message : "AI 分析失败，请稍后重试。";
@@ -219,15 +636,36 @@ async function handleAskAi(question?: string) {
   if (!aiResult.value || !finalQuestion || aiChatStatus.value === "asking") return;
 
   aiChatStatus.value = "asking";
+  aiQuestion.value = "";
+  const historyIndex = aiChatHistory.value.length;
+  aiChatHistory.value.push({
+    question: finalQuestion,
+    answer: "",
+    related_segments: [],
+  });
   try {
-    const result = await chatWithVideo(aiResult.value.analysis_id, finalQuestion);
-    aiChatHistory.value.push({
-      question: finalQuestion,
-      answer: result.answer,
-      related_segments: result.related_segments,
+    await chatWithVideoStream(aiResult.value.analysis_id, finalQuestion, (event) => {
+      const current = aiChatHistory.value[historyIndex];
+      if (!current) return;
+      if (event.type === "related_segments") {
+        current.related_segments = event.related_segments;
+        return;
+      }
+      if (event.type === "answer_delta") {
+        current.answer += event.delta;
+        return;
+      }
+      if (event.type === "complete") {
+        current.answer = event.answer || current.answer;
+        current.related_segments = event.related_segments;
+        return;
+      }
+      if (event.type === "error") {
+        throw new Error(event.message);
+      }
     });
-    aiQuestion.value = "";
   } catch (error) {
+    aiChatHistory.value.splice(historyIndex, 1);
     showNotice(error instanceof Error ? error.message : "AI 问答失败，请稍后重试。");
   } finally {
     aiChatStatus.value = "idle";
@@ -432,7 +870,7 @@ onMounted(async () => {
               <div>
                 <div class="inline-flex items-center gap-2 rounded-lg bg-grape/10 px-2.5 py-1 text-xs font-black text-grape">
                   <BrainCircuit class="h-4 w-4" />
-                  AI 学习笔记
+                  AI 内容摘要
                 </div>
                 <p class="mt-2 text-sm font-medium" :class="aiStatus === 'error' ? 'text-coral' : 'text-ink/58'">
                   {{ aiMessage }}
@@ -466,9 +904,24 @@ onMounted(async () => {
                 </button>
               </div>
               <div class="mt-3 rounded-lg bg-paper p-4">
-                <h3 class="text-base font-black text-ink">视频总结</h3>
-                <p class="mt-2 min-h-24 whitespace-pre-wrap leading-8 text-ink/76">
-                  {{ aiStreamingSummary || "正在读取字幕并连接 DeepSeek，摘要会在这里实时出现..." }}
+                <div v-if="summaryBlocks.length" class="markdown-body mt-3 min-h-24">
+                  <template v-for="(block, index) in summaryBlocks" :key="`stream-md-${index}`">
+                    <h2 v-if="block.type === 'heading' && block.level === 2">{{ block.text }}</h2>
+                    <h3 v-else-if="block.type === 'heading'">{{ block.text }}</h3>
+                    <blockquote v-else-if="block.type === 'quote'" v-html="block.html"></blockquote>
+                    <pre v-else-if="block.type === 'code'"><code>{{ block.text }}</code></pre>
+                    <ol v-else-if="block.type === 'list' && block.ordered" :start="block.start">
+                      <li v-for="(item, itemIndex) in block.items" :key="`stream-li-o-${index}-${itemIndex}`" v-html="item"></li>
+                    </ol>
+                    <ul v-else-if="block.type === 'list'" :class="{ 'nested-list': block.nested }">
+                      <li v-for="(item, itemIndex) in block.items" :key="`stream-li-${index}-${itemIndex}`" v-html="item"></li>
+                    </ul>
+                    <p v-else-if="block.type === 'paragraph'" v-html="block.html"></p>
+                  </template>
+                  <span class="ml-1 inline-block h-5 w-2 animate-pulse rounded-sm bg-coral align-middle"></span>
+                </div>
+                <p v-else class="mt-2 min-h-24 leading-8 text-ink/76">
+                  AI 正在总结视频重点，内容会在这里实时出现...
                   <span class="ml-1 inline-block h-5 w-2 animate-pulse rounded-sm bg-coral align-middle"></span>
                 </p>
               </div>
@@ -489,55 +942,55 @@ onMounted(async () => {
               </div>
 
               <div v-if="aiActiveTab === 'summary'" class="mt-3 rounded-lg bg-paper p-4">
-                <div class="space-y-5">
-                  <section>
-                    <h3 class="text-base font-black text-ink">视频总结</h3>
-                    <p class="mt-2 leading-8 text-ink/76">{{ aiResult.summary }}</p>
-                  </section>
-
-                  <section v-if="aiResult.key_points.length">
-                    <h3 class="text-base font-black text-ink">核心知识点</h3>
-                    <ul class="mt-2 grid gap-2 sm:grid-cols-2">
-                      <li v-for="point in aiResult.key_points" :key="point" class="flex gap-2 rounded-lg bg-white p-3 text-sm font-semibold leading-6 text-ink/76 shadow-lift">
-                        <Check class="mt-1 h-4 w-4 shrink-0 text-emerald-600" />
-                        <span>{{ point }}</span>
-                      </li>
-                    </ul>
-                  </section>
-
-                  <section v-if="aiResult.outline.length">
-                    <h3 class="text-base font-black text-ink">章节大纲</h3>
-                    <div class="mt-2 grid gap-2">
-                      <article v-for="item in aiResult.outline" :key="`${item.start}-${item.title}`" class="rounded-lg bg-white p-3 shadow-lift">
-                        <div class="flex flex-wrap items-center gap-2">
-                          <span v-if="item.start !== null && item.start !== undefined" class="rounded-lg bg-paper px-2 py-1 text-xs font-black text-coral">
-                            {{ formatTimestamp(item.start) }}
-                          </span>
-                          <h4 class="text-sm font-black text-ink">{{ item.title }}</h4>
-                        </div>
-                        <p class="mt-1 text-sm leading-6 text-ink/64">{{ item.summary }}</p>
-                      </article>
-                    </div>
-                  </section>
-                </div>
-                <div v-if="aiResult.suggested_questions.length" class="mt-4 flex flex-wrap gap-2">
-                  <button
-                    v-for="question in aiResult.suggested_questions"
-                    :key="question"
-                    class="focus-ring rounded-lg bg-white px-3 py-2 text-left text-sm font-semibold text-ink/72 shadow-lift hover:text-ink"
-                    @click="aiActiveTab = 'chat'; handleAskAi(question)"
-                  >
-                    {{ question }}
-                  </button>
+                <div>
+                  <div class="markdown-body mt-3">
+                    <template v-for="(block, index) in summaryBlocks" :key="`summary-md-${index}`">
+                      <h2 v-if="block.type === 'heading' && block.level === 2">{{ block.text }}</h2>
+                      <h3 v-else-if="block.type === 'heading'">{{ block.text }}</h3>
+                      <blockquote v-else-if="block.type === 'quote'" v-html="block.html"></blockquote>
+                      <pre v-else-if="block.type === 'code'"><code>{{ block.text }}</code></pre>
+                      <ol v-else-if="block.type === 'list' && block.ordered" :start="block.start">
+                        <li v-for="(item, itemIndex) in block.items" :key="`summary-li-o-${index}-${itemIndex}`" v-html="item"></li>
+                      </ol>
+                      <ul v-else-if="block.type === 'list'" :class="{ 'nested-list': block.nested }">
+                        <li v-for="(item, itemIndex) in block.items" :key="`summary-li-${index}-${itemIndex}`" v-html="item"></li>
+                      </ul>
+                      <p v-else-if="block.type === 'paragraph'" v-html="block.html"></p>
+                    </template>
+                  </div>
                 </div>
               </div>
 
               <div v-else-if="aiActiveTab === 'transcript'" class="mt-3">
-                <div class="mb-3 flex justify-end">
+                <div class="mb-3 flex flex-wrap justify-end gap-2">
                   <button class="focus-ring inline-flex items-center gap-2 rounded-lg bg-paper px-3 py-2 text-sm font-bold text-ink" @click="copyTranscript">
                     <ClipboardCopy class="h-4 w-4" />
                     复制全文
                   </button>
+                  <div class="relative">
+                    <button
+                      class="focus-ring inline-flex items-center gap-2 rounded-lg bg-ink px-3 py-2 text-sm font-bold text-paper"
+                      @click="showSubtitleMenu = !showSubtitleMenu"
+                    >
+                      <Download class="h-4 w-4" />
+                      下载字幕
+                      <ChevronDown class="h-4 w-4" />
+                    </button>
+                    <div v-if="showSubtitleMenu" class="absolute right-0 z-20 mt-2 w-44 overflow-hidden rounded-lg border border-ink/10 bg-white p-1 shadow-lift">
+                      <button class="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm font-bold text-ink hover:bg-paper" @click="downloadSubtitle('srt')">
+                        <FileText class="h-4 w-4 text-coral" />
+                        SRT 字幕
+                      </button>
+                      <button class="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm font-bold text-ink hover:bg-paper" @click="downloadSubtitle('vtt')">
+                        <FileText class="h-4 w-4 text-grape" />
+                        VTT 字幕
+                      </button>
+                      <button class="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm font-bold text-ink hover:bg-paper" @click="downloadSubtitle('txt')">
+                        <FileText class="h-4 w-4 text-emerald-600" />
+                        TXT 文本
+                      </button>
+                    </div>
+                  </div>
                 </div>
                 <div class="max-h-80 overflow-y-auto rounded-lg bg-paper p-3">
                   <p
@@ -552,41 +1005,83 @@ onMounted(async () => {
               </div>
 
               <div v-else-if="aiActiveTab === 'mindmap'" class="mt-3 rounded-lg bg-paper p-4">
-                <div class="relative grid gap-3">
-                  <div class="rounded-lg border border-grape/20 bg-white p-4 shadow-lift">
-                    <div class="inline-flex items-center gap-2 rounded-lg bg-grape/10 px-2.5 py-1 text-xs font-black text-grape">
-                      <BrainCircuit class="h-4 w-4" />
-                      中心主题
-                    </div>
-                    <p class="mt-2 text-lg font-black text-ink">{{ aiResult.title }}</p>
+                <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h3 class="text-base font-black text-ink">图片思维导图</h3>
+                    <p class="mt-1 text-sm font-medium text-ink/58">点击图片可全屏查看，下载会导出高清 PNG。</p>
                   </div>
-                  <div class="grid gap-3 md:grid-cols-2">
-                    <article v-for="item in aiResult.outline" :key="`mind-${item.start}-${item.title}`" class="rounded-lg border border-ink/8 bg-white p-4 shadow-lift">
-                      <div class="flex items-center gap-2">
-                        <span v-if="item.start !== null && item.start !== undefined" class="rounded-lg bg-coral/10 px-2 py-1 text-xs font-black text-coral">
-                          {{ formatTimestamp(item.start) }}
-                        </span>
-                        <h3 class="text-sm font-black text-ink">{{ item.title }}</h3>
-                      </div>
-                      <p class="mt-2 text-sm leading-6 text-ink/62">{{ item.summary }}</p>
-                    </article>
-                  </div>
-                  <div v-if="aiResult.key_points.length" class="rounded-lg border border-emerald-600/15 bg-white p-4 shadow-lift">
-                    <h3 class="text-sm font-black text-ink">关键结论</h3>
-                    <div class="mt-2 flex flex-wrap gap-2">
-                      <span v-for="point in aiResult.key_points" :key="`map-${point}`" class="rounded-lg bg-mint/18 px-3 py-2 text-xs font-bold leading-5 text-emerald-800">
-                        {{ point }}
-                      </span>
-                    </div>
+                  <div class="flex flex-wrap gap-2">
+                    <button class="focus-ring inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-sm font-bold text-ink shadow-lift" @click="showMindMapLightbox = true">
+                      <Maximize2 class="h-4 w-4" />
+                      全屏
+                    </button>
+                    <button class="focus-ring inline-flex items-center gap-2 rounded-lg bg-ink px-3 py-2 text-sm font-bold text-paper" @click="downloadMindMapPng">
+                      <ImageDown class="h-4 w-4" />
+                      下载高清图
+                    </button>
                   </div>
                 </div>
+                <button
+                  class="focus-ring block w-full overflow-hidden rounded-lg border border-ink/10 bg-white text-left shadow-lift"
+                  @click="showMindMapLightbox = true"
+                >
+                  <img v-if="mindMapDataUrl" :src="mindMapDataUrl" alt="AI 生成的思维导图" class="h-auto w-full" />
+                </button>
               </div>
 
               <div v-else class="mt-3">
+                <div v-if="!aiChatHistory.length" class="rounded-lg border border-dashed border-ink/15 bg-paper p-5">
+                  <div class="grid gap-4 md:grid-cols-[180px_1fr] md:items-center">
+                    <div class="mx-auto grid h-36 w-36 place-items-center rounded-full bg-white shadow-lift">
+                      <div class="grid h-24 w-24 place-items-center rounded-full bg-grape/10 text-grape">
+                        <MessageCircle class="h-11 w-11" />
+                      </div>
+                    </div>
+                    <div>
+                      <h3 class="text-lg font-black text-ink">围绕视频内容继续追问</h3>
+                      <p class="mt-2 leading-7 text-ink/62">
+                        还没有发送消息。你可以从推荐问题开始，也可以直接输入自己关心的知识点、例子或复习问题。
+                      </p>
+                      <div class="mt-3 flex flex-wrap gap-2">
+                        <button
+                          v-for="question in chatQuestionOptions"
+                          :key="`empty-chat-${question}`"
+                          class="focus-ring rounded-lg bg-white px-3 py-2 text-left text-sm font-semibold text-ink/72 shadow-lift hover:text-ink"
+                          @click="handleAskAi(question)"
+                        >
+                          {{ question }}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
                 <div class="grid gap-3">
                   <article v-for="item in aiChatHistory" :key="`${item.question}-${item.answer}`" class="rounded-lg bg-paper p-4">
                     <p class="text-sm font-black text-ink">问：{{ item.question }}</p>
-                    <p class="mt-2 leading-7 text-ink/72">答：{{ item.answer }}</p>
+                    <div class="mt-2 leading-7 text-ink/72">
+                      <span class="font-black text-ink">答：</span>
+                      <template v-if="item.answer">
+                        <div class="markdown-body chat-markdown mt-2">
+                          <template v-for="(block, index) in parseMarkdown(item.answer)" :key="`chat-md-${item.question}-${index}`">
+                            <h2 v-if="block.type === 'heading' && block.level === 2">{{ block.text }}</h2>
+                            <h3 v-else-if="block.type === 'heading'">{{ block.text }}</h3>
+                            <blockquote v-else-if="block.type === 'quote'" v-html="block.html"></blockquote>
+                            <pre v-else-if="block.type === 'code'"><code>{{ block.text }}</code></pre>
+                            <ol v-else-if="block.type === 'list' && block.ordered" :start="block.start">
+                              <li v-for="(listItem, itemIndex) in block.items" :key="`chat-li-o-${index}-${itemIndex}`" v-html="listItem"></li>
+                            </ol>
+                            <ul v-else-if="block.type === 'list'" :class="{ 'nested-list': block.nested }">
+                              <li v-for="(listItem, itemIndex) in block.items" :key="`chat-li-${index}-${itemIndex}`" v-html="listItem"></li>
+                            </ul>
+                            <p v-else-if="block.type === 'paragraph'" v-html="block.html"></p>
+                          </template>
+                        </div>
+                      </template>
+                      <template v-else>
+                        正在思考...
+                        <span v-if="aiChatStatus === 'asking'" class="ml-1 inline-block h-4 w-2 animate-pulse rounded-sm bg-coral align-middle"></span>
+                      </template>
+                    </div>
                     <div v-if="item.related_segments.length" class="mt-3 flex flex-wrap gap-2">
                       <span v-for="segment in item.related_segments.slice(0, 4)" :key="`${item.question}-${segment.start}`" class="rounded-lg bg-white px-2 py-1 text-xs font-bold text-ink/55">
                         {{ formatTimestamp(segment.start) }}
@@ -725,6 +1220,38 @@ onMounted(async () => {
               {{ plan.cta }}
             </button>
           </article>
+        </div>
+      </div>
+    </div>
+
+    <div
+      v-if="showMindMapLightbox"
+      class="fixed inset-0 z-50 bg-ink/85 p-4 backdrop-blur-sm"
+      @click.self="showMindMapLightbox = false"
+    >
+      <div class="mx-auto flex h-full max-w-7xl flex-col gap-3">
+        <div class="flex items-center justify-between gap-3 text-paper">
+          <div>
+            <p class="text-sm font-black text-honey">AI 思维导图</p>
+            <h2 class="line-clamp-1 text-xl font-black">{{ aiResult?.title }}</h2>
+          </div>
+          <div class="flex gap-2">
+            <button class="focus-ring inline-flex items-center gap-2 rounded-lg bg-paper px-3 py-2 text-sm font-black text-ink" @click="downloadMindMapPng">
+              <ImageDown class="h-4 w-4" />
+              下载高清图
+            </button>
+            <button class="focus-ring grid h-10 w-10 place-items-center rounded-lg bg-white/10 text-paper hover:bg-white/15" @click="showMindMapLightbox = false">
+              <X class="h-5 w-5" />
+            </button>
+          </div>
+        </div>
+        <div class="min-h-0 flex-1 rounded-lg bg-paper p-3">
+          <img
+            v-if="mindMapDataUrl"
+            :src="mindMapDataUrl"
+            alt="AI 生成的思维导图全屏预览"
+            class="h-full w-full rounded-lg bg-white object-contain shadow-lift"
+          />
         </div>
       </div>
     </div>

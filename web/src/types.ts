@@ -80,3 +80,9 @@ export type AiAnalysisStreamEvent =
   | { type: "summary_delta"; delta: string }
   | { type: "complete"; analysis: AiAnalysisResponse }
   | { type: "error"; status_code?: number; message: string };
+
+export type AiChatStreamEvent =
+  | { type: "related_segments"; related_segments: TranscriptSegment[] }
+  | { type: "answer_delta"; delta: string }
+  | { type: "complete"; answer: string; related_segments: TranscriptSegment[]; model: string }
+  | { type: "error"; status_code?: number; message: string };

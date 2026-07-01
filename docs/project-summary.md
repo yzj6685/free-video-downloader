@@ -47,8 +47,10 @@
 - `GET /api/billing/plans`：静态会员套餐。
 - `POST /api/ai/summary`：视频总结占位。
 - `POST /api/ai/translate-subtitles`：字幕翻译占位。
-- `POST /api/ai/analyze`：基于平台字幕生成 AI 学习笔记。
-- `POST /api/ai/chat`：基于当前分析结果追问视频内容。
+- `POST /api/ai/analyze`：基于平台字幕生成 AI 内容摘要，兼容非流式调用。
+- `POST /api/ai/analyze-stream`：流式生成 AI 内容摘要，当前前端主要使用。
+- `POST /api/ai/chat`：基于当前分析结果追问视频内容，兼容非流式调用。
+- `POST /api/ai/chat-stream`：流式输出 AI 问答，当前前端主要使用。
 
 ## 关键文件
 
@@ -89,7 +91,7 @@ cd C:\code\ai-code\free-video-downloader
 
 当前最近一次验证结果：
 
-- 后端测试：`26 passed`
+- 后端测试：`27 passed`
 - 前端类型检查：通过
 - 前端生产构建：通过
 - 端到端烟测：通过
@@ -116,6 +118,24 @@ $env:AI_MAX_TRANSCRIPT_CHARS="24000"
 无字幕视频会返回明确提示：“当前视频没有可提取字幕，音频转写将在后续版本支持。”
 
 B 站字幕提取已参考 `liyupi/free-video-downloader` 的实现做专用兜底：页面初始数据没有 `subtitle_url` 时，会请求 `x/v2/dm/view?aid=...&oid=...&type=1` 获取 CC 字幕 / AI 字幕；若仍失败，再尝试 `x/player/v2` 和本机 Chrome/Edge 登录态 Cookie。当前 `BV1mAAmzqEfP` 已验证可提取 114 段字幕并完成 AI 分析。
+
+## AI 总结当前状态
+
+AI 总结功能已完成一轮产品化优化，详细设计见 `docs/ai-summary-current-design.md`。
+
+当前前端 AI 面板包含：
+
+- `总结摘要`：流式渲染 Markdown，主要结构为 `视频概述` 与 `内容大纲`，适配学习、技术、美食、旅游、生活等通用视频。
+- `字幕文本`：支持复制全文，支持下载 `SRT / VTT / TXT`。
+- `思维导图`：基于 AI 大纲或字幕分组生成 SVG 图片，支持全屏预览和高清 PNG 下载。
+- `AI 问答`：基于当前 `analysis_id` 流式回答，回答正文支持 Markdown 渲染。
+
+当前 Markdown 处理要点：
+
+- 后端一次流式输出完整 Markdown，不再等待额外结构化 JSON 生成。
+- 后端从 Markdown 的 `内容大纲` 轻量解析 `outline`，用于思维导图。
+- 前端支持标题、段落、引用、代码块、有序列表和嵌套列表渲染。
+- 有序列表自动续号，嵌套列表有缩进和左侧引导线。
 
 ## FFmpeg 说明
 

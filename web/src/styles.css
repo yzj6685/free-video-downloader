@@ -36,4 +36,90 @@
   .focus-ring {
     @apply focus:outline-none focus-visible:ring-4 focus-visible:ring-grape/25;
   }
+
+  .markdown-body {
+    @apply space-y-4 leading-8 text-ink/75;
+  }
+
+  .markdown-body h2 {
+    @apply mt-9 border-b border-ink/10 pb-3 text-2xl font-black leading-9 text-ink first:mt-0;
+  }
+
+  .markdown-body h3 {
+    @apply mt-6 text-lg font-black leading-8 text-ink first:mt-0;
+  }
+
+  .markdown-body p {
+    @apply text-base leading-8 text-ink/75;
+  }
+
+  .markdown-body ul,
+  .markdown-body ol {
+    @apply space-y-3 pl-7;
+  }
+
+  .markdown-body li {
+    @apply text-base font-medium leading-8 text-ink/75;
+  }
+
+  .markdown-body ul li {
+    @apply list-disc marker:text-grape;
+  }
+
+  .markdown-body ol {
+    @apply list-decimal marker:text-base marker:font-bold marker:text-grape;
+  }
+
+  .markdown-body ol li {
+    @apply pl-2;
+  }
+
+  .markdown-body ol > li > strong:first-child {
+    @apply text-base font-black text-ink;
+  }
+
+  .markdown-body ol > li > ul {
+    @apply mt-2 space-y-1 pl-5;
+  }
+
+  .markdown-body > ol {
+    @apply space-y-5;
+  }
+
+  .markdown-body > ol > li {
+    @apply font-black text-ink;
+  }
+
+  .markdown-body .nested-list {
+    @apply ml-7 border-l-2 border-grape/20 pl-6;
+  }
+
+  .markdown-body .nested-list li {
+    @apply text-ink/70;
+  }
+
+  .markdown-body blockquote {
+    @apply rounded-lg border-l-4 border-grape bg-white px-4 py-3 font-semibold text-ink/70 shadow-lift;
+  }
+
+  .markdown-body pre {
+    @apply overflow-x-auto rounded-lg bg-ink p-4 text-sm leading-7 text-paper;
+  }
+
+  .chat-markdown {
+    @apply space-y-2;
+  }
+
+  .chat-markdown h2,
+  .chat-markdown h3 {
+    @apply mt-3 text-base leading-7 first:mt-0;
+  }
+
+  .chat-markdown p {
+    @apply text-base leading-8;
+  }
+
+  .chat-markdown li {
+    @apply text-base font-medium;
+  }
 }

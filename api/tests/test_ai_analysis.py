@@ -150,24 +150,27 @@ def test_ai_analyze_route_returns_structured_result(monkeypatch):
             TranscriptSegment(start=2, end=4, text="这是第二段结论"),
         ]
 
-    async def fake_complete_json(messages, max_tokens=4096):
-        return {
-            "summary": "这是测试摘要",
-            "outline": [{"title": "开场", "start": 0, "summary": "介绍主题"}],
-            "key_points": ["知识点一", "知识点二"],
-            "suggested_questions": ["这个视频讲了什么？"],
-        }
+    async def fake_stream_text(messages, max_tokens=2048):
+        yield "## 视频概述\n这是测试摘要\n\n"
+        yield "## 内容大纲\n1. **开场** [00:00]\n"
+        yield "   • **主题说明**：介绍主题\n"
 
     monkeypatch.setattr("app.services.ai_analysis_service.subtitle_service.extract", fake_extract)
-    monkeypatch.setattr("app.services.ai_analysis_service.deepseek_client.complete_json", fake_complete_json)
+    monkeypatch.setattr("app.services.ai_analysis_service.deepseek_client.stream_text", fake_stream_text)
 
     response = client.post("/api/ai/analyze", json={"url": "https://example.com/video"})
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["title"] == "测试视频"
-    assert payload["summary"] == "这是测试摘要"
-    assert payload["key_points"] == ["知识点一", "知识点二"]
+    assert "这是测试摘要" in payload["summary"]
+    assert "[00:00]" not in payload["summary"]
+    assert "•" not in payload["summary"]
+    assert "- **主题说明**：介绍主题" in payload["summary"]
+    assert payload["key_points"] == []
+    assert payload["outline"][0]["title"] == "开场"
+    assert payload["outline"][0]["start"] is None
+    assert payload["suggested_questions"] == []
     assert payload["analysis_id"]
 
 
@@ -246,3 +249,42 @@ def test_ai_chat_route_requires_existing_analysis():
 
     assert response.status_code == 404
     assert "重新分析" in response.json()["detail"]
+
+
+def test_ai_chat_stream_route_returns_sse_events(monkeypatch):
+    analysis = AiAnalysisResponse(
+        analysis_id="analysis-stream-test",
+        title="测试视频",
+        source_url="https://example.com/video",
+        summary="这是测试摘要",
+        outline=[],
+        key_points=[],
+        transcript_segments=[TranscriptSegment(start=0, end=2, text="第一段字幕")],
+        suggested_questions=[],
+        model="test-model",
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    ai_analysis_service._cache["analysis-stream-test"] = CachedAnalysis(
+        response=analysis,
+        transcript_text="[00:00] 第一段字幕",
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+
+    async def fake_stream_text(messages, max_tokens=2048):
+        yield "这是"
+        yield "流式回答"
+
+    monkeypatch.setattr("app.services.ai_analysis_service.deepseek_client.stream_text", fake_stream_text)
+
+    response = client.post(
+        "/api/ai/chat-stream",
+        json={"analysis_id": "analysis-stream-test", "question": "讲了什么？"},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    body = response.text
+    assert '"type": "related_segments"' in body
+    assert '"type": "answer_delta"' in body
+    assert "流式回答" in body
+    assert '"type": "complete"' in body
