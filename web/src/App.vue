@@ -49,6 +49,7 @@ const aiChatStatus = ref<"idle" | "asking">("idle");
 const aiChatHistory = ref<AiChatMessage[]>([]);
 const showSubtitleMenu = ref(false);
 const showMindMapLightbox = ref(false);
+const analysisRunId = ref(0);
 
 type MarkdownBlock =
   | { type: "heading"; level: 2 | 3 | 4; text: string }
@@ -538,6 +539,7 @@ async function pasteFromClipboard() {
 
 async function handleProbe() {
   if (!canProbe.value) return;
+  analysisRunId.value += 1;
   status.value = "probing";
   message.value = "正在解析视频信息，请稍等...";
   probeResult.value = null;
@@ -550,9 +552,12 @@ async function handleProbe() {
     aiResult.value = null;
     aiStreamingSummary.value = "";
     aiChatHistory.value = [];
-    aiMessage.value = "解析成功后，可继续生成 AI 内容摘要。";
+    showSubtitleMenu.value = false;
+    showMindMapLightbox.value = false;
+    aiMessage.value = "解析成功，正在自动生成 AI 内容摘要。";
     status.value = "ready";
     message.value = "解析成功，选择格式后即可下载。";
+    void handleAnalyze();
   } catch (error) {
     status.value = "error";
     message.value = error instanceof Error ? error.message : "解析失败，请稍后重试。";
@@ -587,6 +592,11 @@ async function handleAnalyze() {
     return;
   }
 
+  const runId = analysisRunId.value + 1;
+  analysisRunId.value = runId;
+  const analysisUrl = probeResult.value.url;
+  const analysisFormat = activeFormat.value;
+
   aiStatus.value = "analyzing";
   aiMessage.value = "正在提取平台字幕...";
   aiResult.value = null;
@@ -595,7 +605,8 @@ async function handleAnalyze() {
   aiActiveTab.value = "summary";
 
   try {
-    await analyzeVideoStream(probeResult.value.url, activeFormat.value, (event) => {
+    await analyzeVideoStream(analysisUrl, analysisFormat, (event) => {
+      if (runId !== analysisRunId.value) return;
       if (event.type === "status") {
         aiMessage.value = event.message;
         return;
@@ -611,7 +622,7 @@ async function handleAnalyze() {
       }
       if (event.type === "complete") {
         aiResult.value = event.analysis;
-    aiStreamingSummary.value = event.analysis.summary || aiStreamingSummary.value;
+        aiStreamingSummary.value = event.analysis.summary || aiStreamingSummary.value;
         aiStatus.value = "ready";
         aiMessage.value = "视频总结已生成，字幕、思维导图和 AI 问答已可使用。";
         return;
@@ -620,12 +631,14 @@ async function handleAnalyze() {
         throw new Error(event.message);
       }
     });
+    if (runId !== analysisRunId.value) return;
     if (!aiResult.value) {
       throw new Error("AI 分析没有返回完整结果，请稍后重试。");
     }
     aiStatus.value = "ready";
     aiMessage.value = "视频总结已生成，字幕、思维导图和 AI 问答已可使用。";
   } catch (error) {
+    if (runId !== analysisRunId.value) return;
     aiStatus.value = "error";
     aiMessage.value = error instanceof Error ? error.message : "AI 分析失败，请稍后重试。";
   }
@@ -751,7 +764,7 @@ onMounted(async () => {
 
     <section class="section-shell pb-10 pt-8 lg:pb-16 lg:pt-12">
       <div class="grid min-w-0 items-center gap-8 lg:grid-cols-[1.05fr_0.95fr]">
-        <div class="min-w-0">
+        <div v-if="!probeResult" class="min-w-0">
           <div class="mb-5 inline-flex max-w-full flex-wrap items-center gap-2 rounded-lg border border-ink/10 bg-white/70 px-3 py-2 text-sm font-semibold text-ink/70">
             <Sparkles class="h-4 w-4 shrink-0 text-coral" />
             <span class="min-w-0">由 yt-dlp 驱动，覆盖大量公开可访问的视频站点</span>
@@ -765,7 +778,7 @@ onMounted(async () => {
           </p>
         </div>
 
-        <div class="tile min-w-0 p-4 sm:p-5">
+        <div class="tile min-w-0 p-4 sm:p-5" :class="{ 'lg:col-span-2': probeResult }">
           <div class="rounded-lg border border-dashed border-ink/15 bg-paper/70 p-3 text-sm font-semibold text-ink/65">
             请仅下载你拥有权利或平台允许保存的内容。
           </div>
@@ -804,68 +817,71 @@ onMounted(async () => {
             {{ message }}
           </p>
 
-          <div v-if="probeResult" class="mt-5 grid gap-4 rounded-lg bg-white p-3 shadow-lift sm:grid-cols-[180px_1fr]">
-            <div class="aspect-video overflow-hidden rounded-lg bg-ink/8">
-              <img
-                v-if="thumbnailUrl"
-                :src="thumbnailUrl"
-                alt="视频封面"
-                class="h-full w-full object-cover"
-              />
-              <video
-                v-else-if="previewVideoUrl"
-                :src="previewVideoUrl"
-                class="h-full w-full object-cover"
-                muted
-                autoplay
-                loop
-                playsinline
-                preload="metadata"
-              />
-              <div v-else class="grid h-full place-items-center text-ink/45">
-                <Play class="h-10 w-10" />
+          <div
+            v-if="probeResult"
+            class="mt-5 grid gap-4 lg:grid-cols-[minmax(320px,0.42fr)_minmax(0,0.58fr)] xl:grid-cols-[minmax(320px,0.38fr)_minmax(0,0.62fr)]"
+          >
+            <div class="rounded-lg bg-white p-3 shadow-lift">
+              <div class="grid gap-4 sm:grid-cols-[180px_1fr] lg:grid-cols-1">
+                <div class="aspect-video overflow-hidden rounded-lg bg-ink/8">
+                  <img
+                    v-if="thumbnailUrl"
+                    :src="thumbnailUrl"
+                    alt="视频封面"
+                    class="h-full w-full object-cover"
+                  />
+                  <video
+                    v-else-if="previewVideoUrl"
+                    :src="previewVideoUrl"
+                    class="h-full w-full object-cover"
+                    muted
+                    autoplay
+                    loop
+                    playsinline
+                    preload="metadata"
+                  />
+                  <div v-else class="grid h-full place-items-center text-ink/45">
+                    <Play class="h-10 w-10" />
+                  </div>
+                </div>
+                <div class="min-w-0">
+                  <div class="mb-2 flex flex-wrap items-center gap-2 text-xs font-bold text-ink/55">
+                    <span class="rounded-lg bg-mint/20 px-2 py-1">{{ probeResult.extractor || "公开视频" }}</span>
+                    <span>{{ formatDuration(probeResult.duration) }}</span>
+                    <span v-if="probeResult.uploader">by {{ probeResult.uploader }}</span>
+                  </div>
+                  <h2 class="line-clamp-2 text-lg font-black text-ink">{{ probeResult.title }}</h2>
+                  <div class="mt-3 grid gap-3">
+                    <select
+                      v-model="selectedFormat"
+                      class="focus-ring h-12 min-w-0 rounded-lg border border-ink/12 bg-paper px-3 text-sm font-semibold text-ink"
+                    >
+                      <option v-for="format in probeResult.formats" :key="format.format_id" :value="format.format_id">
+                        {{ format.label }} · {{ formatSize(format.filesize) }}
+                      </option>
+                    </select>
+                    <button
+                      class="focus-ring inline-flex h-12 items-center justify-center gap-2 rounded-lg bg-coral px-5 font-black text-white hover:bg-coral/90"
+                      :disabled="status === 'downloading'"
+                      @click="handleDownload"
+                    >
+                      <Loader2 v-if="status === 'downloading'" class="h-5 w-5 animate-spin" />
+                      <ArrowDownToLine v-else class="h-5 w-5" />
+                      下载
+                    </button>
+                    <div class="inline-flex min-h-11 items-center gap-2 rounded-lg bg-grape/10 px-3 py-2 text-sm font-bold text-grape">
+                      <Loader2 v-if="aiStatus === 'analyzing'" class="h-4 w-4 animate-spin" />
+                      <WandSparkles v-else class="h-4 w-4" />
+                      <span>
+                        {{ aiStatus === "analyzing" ? "AI 正在自动总结" : aiStatus === "ready" ? "AI 总结已生成" : aiStatus === "error" ? "AI 总结遇到问题" : "AI 将自动总结" }}
+                      </span>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
-            <div class="min-w-0">
-              <div class="mb-2 flex flex-wrap items-center gap-2 text-xs font-bold text-ink/55">
-                <span class="rounded-lg bg-mint/20 px-2 py-1">{{ probeResult.extractor || "公开视频" }}</span>
-                <span>{{ formatDuration(probeResult.duration) }}</span>
-                <span v-if="probeResult.uploader">by {{ probeResult.uploader }}</span>
-              </div>
-              <h2 class="line-clamp-2 text-lg font-black text-ink">{{ probeResult.title }}</h2>
-              <div class="mt-3 grid gap-3 sm:grid-cols-2">
-                <select
-                  v-model="selectedFormat"
-                  class="focus-ring h-12 min-w-0 rounded-lg border border-ink/12 bg-paper px-3 text-sm font-semibold text-ink sm:col-span-2"
-                >
-                  <option v-for="format in probeResult.formats" :key="format.format_id" :value="format.format_id">
-                    {{ format.label }} · {{ formatSize(format.filesize) }}
-                  </option>
-                </select>
-                <button
-                  class="focus-ring inline-flex h-12 items-center justify-center gap-2 rounded-lg bg-coral px-5 font-black text-white hover:bg-coral/90"
-                  :disabled="status === 'downloading'"
-                  @click="handleDownload"
-                >
-                  <Loader2 v-if="status === 'downloading'" class="h-5 w-5 animate-spin" />
-                  <ArrowDownToLine v-else class="h-5 w-5" />
-                  下载
-                </button>
-                <button
-                  class="focus-ring inline-flex h-12 items-center justify-center gap-2 rounded-lg bg-ink px-5 font-black text-paper hover:bg-coal disabled:cursor-not-allowed disabled:opacity-55"
-                  :disabled="aiStatus === 'analyzing'"
-                  @click="handleAnalyze"
-                >
-                  <Loader2 v-if="aiStatus === 'analyzing'" class="h-5 w-5 animate-spin" />
-                  <WandSparkles v-else class="h-5 w-5" />
-                  AI 分析
-                </button>
-              </div>
-            </div>
-          </div>
 
-          <Teleport defer to="#ai-analysis-slot">
-          <div v-if="probeResult && aiStatus !== 'idle'" class="rounded-lg border border-ink/10 bg-white p-4 shadow-lift">
+            <div v-if="aiStatus !== 'idle'" class="min-w-0 rounded-lg border border-ink/10 bg-white p-4 shadow-lift">
             <div class="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
               <div>
                 <div class="inline-flex items-center gap-2 rounded-lg bg-grape/10 px-2.5 py-1 text-xs font-black text-grape">
@@ -1109,12 +1125,10 @@ onMounted(async () => {
               </div>
             </div>
           </div>
-          </Teleport>
+          </div>
         </div>
       </div>
     </section>
-
-    <section id="ai-analysis-slot" class="section-shell pb-12"></section>
 
     <section id="ai" class="section-shell pb-12">
       <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
