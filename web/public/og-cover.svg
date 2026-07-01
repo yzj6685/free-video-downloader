@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="一手遮天视频下载总结器分享图">
+  <rect width="1200" height="630" fill="#fffaf0"/>
+  <rect x="70" y="72" width="1060" height="486" rx="34" fill="#ffffff" stroke="#161612" stroke-opacity="0.12"/>
+  <circle cx="1000" cy="145" r="86" fill="#5bc0eb" fill-opacity="0.2"/>
+  <circle cx="184" cy="500" r="120" fill="#ff6b5f" fill-opacity="0.13"/>
+  <g transform="translate(98 112)">
+    <rect width="88" height="88" rx="22" fill="#161612"/>
+    <path d="M28 24h33a8 8 0 0 1 8 8v21a8 8 0 0 1-8 8H28a8 8 0 0 1-8-8V32a8 8 0 0 1 8-8Z" fill="#fffaf0"/>
+    <path d="M41 33v20l17-10-17-10Z" fill="#ff6b5f"/>
+  </g>
+  <text x="98" y="254" fill="#161612" font-size="58" font-weight="900" font-family="Arial, 'Microsoft YaHei', sans-serif">一手遮天视频下载总结器</text>
+  <text x="98" y="333" fill="#ff6b5f" font-size="42" font-weight="900" font-family="Arial, 'Microsoft YaHei', sans-serif">下载、字幕、AI 总结一步完成</text>
+  <text x="98" y="402" fill="#4d4a45" font-size="26" font-weight="700" font-family="Arial, 'Microsoft YaHei', sans-serif">免费在线视频下载 | AI 视频总结 | 字幕提取 | 学习笔记 | 思维导图</text>
+  <rect x="98" y="462" width="244" height="58" rx="16" fill="#161612"/>
+  <text x="128" y="501" fill="#fffaf0" font-size="24" font-weight="900" font-family="Arial, 'Microsoft YaHei', sans-serif">downloadany.yzj.cn</text>
+</svg>

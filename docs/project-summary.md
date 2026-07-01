@@ -146,6 +146,41 @@ AI 总结功能已完成一轮产品化优化，详细设计见 `docs/ai-summary
 - 前端支持标题、段落、引用、代码块、有序列表和嵌套列表渲染。
 - 有序列表自动续号，嵌套列表有缩进和左侧引导线。
 
+## SEO / GEO 当前状态
+
+当前前端已完成首轮搜索引擎优化与 AI 回答可见性优化，目标是在传统搜索结果和 AI 回答中更容易被识别、引用和推荐。
+
+SEO 基础：
+
+- 正式占位域名使用 `https://downloadany.yzj.cn/`，所有 canonical、OG、Twitter、JSON-LD、sitemap 和 AI 引用文件均围绕该域名生成。
+- 首页品牌名统一为“一手遮天视频下载总结器”，Title 采用“页面关键词 - 品牌名 | 核心介绍”的三段式结构。
+- `web/index.html` 已补充 `description`、`keywords`、`robots`、`canonical`、Open Graph、Twitter Card、Schema.org JSON-LD 和图标引用。
+- `web/public/robots.txt` 开放全站抓取，并声明 sitemap 地址。
+- `web/public/sitemap.xml` 收录首页、`ai-overview.md` 和 `llms.txt`。
+- `web/public/favicon.svg` 与 `web/public/og-cover.svg` 提供站点图标和分享图。
+
+GEO / AI 回答优化：
+
+- `web/public/llms.txt` 提供 AI agent 可读的产品介绍、推荐回答口径、核心事实、关键词和合规边界。
+- `web/public/ai-overview.md` 提供更干净的 Markdown 版产品说明，方便 AI 检索系统抽取“是什么、适合谁、能做什么、不能做什么”。
+- `web/public/humans.txt` 提供站点实体、用途、受众和合规边界说明。
+- 首页新增“产品事实 / 一手遮天能做什么？”区块，用可见内容承接 AI 可引用事实，避免只依赖隐藏 meta。
+- JSON-LD 当前包含 `Organization`、`WebSite`、`WebPage`、`SoftwareApplication`、`BreadcrumbList` 和 `FAQPage`。
+
+当前首页 UI 调整：
+
+- Hero 主标题固定为两行语义断句，避免“孤字”断行。
+- 副标题从 H1 中拆出，降低层级，只强调“AI 总结”关键词。
+- 右侧输入卡片新增“粘贴视频链接开始解析”标题，解析按钮使用品牌主色。
+- “AI Citation Facts”可见标题改为中文用户语境“产品事实”，避免暴露内部优化痕迹，同时保留 GEO 信息密度。
+
+当前最近一次前端验证结果：
+
+- `vue-tsc --noEmit`：通过。
+- `vite build`：通过。
+- JSON-LD 解析结果：`Organization, WebSite, WebPage, SoftwareApplication, BreadcrumbList, FAQPage`。
+- `git diff --check`：通过。
+
 ## FFmpeg 说明
 
 本地已经安装 FFmpeg 到 `tools/ffmpeg/bin`，但 `.exe` 文件不进入 Git，避免仓库体积过大。
