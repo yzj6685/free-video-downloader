@@ -17,14 +17,14 @@ router = APIRouter(prefix="/api/ai", tags=["ai-analysis"])
 
 @router.post("/analyze", response_model=AiAnalysisResponse)
 async def analyze_video(payload: AiAnalysisRequest) -> AiAnalysisResponse:
-    return await ai_analysis_service.analyze(str(payload.url), payload.language)
+    return await ai_analysis_service.analyze(str(payload.url), payload.language, payload.format_id)
 
 
 @router.post("/analyze-stream")
 async def analyze_video_stream(payload: AiAnalysisRequest) -> StreamingResponse:
     async def event_stream() -> AsyncIterator[str]:
         try:
-            async for event in ai_analysis_service.analyze_stream(str(payload.url), payload.language):
+            async for event in ai_analysis_service.analyze_stream(str(payload.url), payload.language, payload.format_id):
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except HTTPException as exc:
             event = {"type": "error", "status_code": exc.status_code, "message": exc.detail}

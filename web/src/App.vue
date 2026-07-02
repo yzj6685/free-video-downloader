@@ -26,7 +26,7 @@ import {
   X,
   Zap,
 } from "lucide-vue-next";
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { analyzeVideoStream, chatWithVideoStream, fetchPlans, probeVideo, requestComingSoon, startDownload } from "./api";
 import type { AiAnalysisResponse, AiChatMessage, BillingPlan, ProbeResponse } from "./types";
 
@@ -50,6 +50,9 @@ const aiChatHistory = ref<AiChatMessage[]>([]);
 const showSubtitleMenu = ref(false);
 const showMindMapLightbox = ref(false);
 const analysisRunId = ref(0);
+const aiProgress = ref(0);
+const aiStage = ref<"idle" | "subtitle" | "asr" | "summary" | "complete">("idle");
+let aiProgressTimer: ReturnType<typeof window.setInterval> | null = null;
 
 type MarkdownBlock =
   | { type: "heading"; level: 2 | 3 | 4; text: string }
@@ -67,6 +70,19 @@ interface MindMapNode {
 
 const canProbe = computed(() => videoUrl.value.trim().length > 5 && status.value !== "probing");
 const activeFormat = computed(() => selectedFormat.value || probeResult.value?.recommended_format_id || "best");
+const aiProgressSteps = [
+  { key: "subtitle", label: "读取字幕" },
+  { key: "asr", label: "音频转写" },
+  { key: "summary", label: "生成摘要" },
+] as const;
+const aiProgressPercent = computed(() => Math.max(0, Math.min(100, Math.round(aiProgress.value))));
+const activeAiStepIndex = computed(() => {
+  if (aiStage.value === "summary") return 2;
+  if (aiStage.value === "asr") return 1;
+  if (aiStage.value === "subtitle") return 0;
+  if (aiStage.value === "complete") return 3;
+  return -1;
+});
 const thumbnailUrl = computed(() => {
   if (!probeResult.value?.thumbnail) return "";
   const params = new URLSearchParams({
@@ -638,6 +654,38 @@ async function handleDownload() {
   }
 }
 
+function clearAiProgressTimer() {
+  if (aiProgressTimer) {
+    window.clearInterval(aiProgressTimer);
+    aiProgressTimer = null;
+  }
+}
+
+function startAiProgress(stage: "subtitle" | "asr" | "summary", initialProgress = 8) {
+  clearAiProgressTimer();
+  aiStage.value = stage;
+  aiProgress.value = Math.max(aiProgress.value, initialProgress);
+  const ceiling = stage === "summary" ? 96 : stage === "asr" ? 84 : 68;
+  aiProgressTimer = window.setInterval(() => {
+    if (aiStatus.value !== "analyzing") {
+      clearAiProgressTimer();
+      return;
+    }
+    const gap = ceiling - aiProgress.value;
+    if (gap <= 0.5) return;
+    aiProgress.value += Math.max(0.35, gap * 0.06);
+  }, 900);
+}
+
+function updateAiProgressFromStatus(stage?: string, progress?: number) {
+  if (stage === "asr" || stage === "subtitle" || stage === "summary") {
+    startAiProgress(stage, progress ?? aiProgress.value);
+  }
+  if (typeof progress === "number") {
+    aiProgress.value = Math.max(aiProgress.value, progress);
+  }
+}
+
 async function handleAnalyze() {
   if (!probeResult.value) {
     showNotice("请先解析一个视频，再生成 AI 内容摘要。");
@@ -655,24 +703,36 @@ async function handleAnalyze() {
   aiStreamingSummary.value = "";
   aiChatHistory.value = [];
   aiActiveTab.value = "summary";
+  aiProgress.value = 6;
+  aiStage.value = "subtitle";
+  startAiProgress("subtitle", 6);
 
   try {
     await analyzeVideoStream(analysisUrl, analysisFormat, (event) => {
       if (runId !== analysisRunId.value) return;
       if (event.type === "status") {
         aiMessage.value = event.message;
+        updateAiProgressFromStatus(event.stage, event.progress);
         return;
       }
       if (event.type === "transcript_ready") {
+        clearAiProgressTimer();
+        aiStage.value = "summary";
+        aiProgress.value = Math.max(aiProgress.value, 86);
+        startAiProgress("summary", 88);
         aiMessage.value = `已提取 ${event.transcript_count} 段字幕，正在生成总结...`;
         return;
       }
       if (event.type === "summary_delta") {
         aiStreamingSummary.value += event.delta;
+        aiProgress.value = Math.max(aiProgress.value, 92);
         aiMessage.value = "AI 正在生成总结，可先阅读已输出内容。";
         return;
       }
       if (event.type === "complete") {
+        clearAiProgressTimer();
+        aiStage.value = "complete";
+        aiProgress.value = 100;
         aiResult.value = event.analysis;
         aiStreamingSummary.value = event.analysis.summary || aiStreamingSummary.value;
         aiStatus.value = "ready";
@@ -688,9 +748,13 @@ async function handleAnalyze() {
       throw new Error("AI 分析没有返回完整结果，请稍后重试。");
     }
     aiStatus.value = "ready";
+    clearAiProgressTimer();
+    aiStage.value = "complete";
+    aiProgress.value = 100;
     aiMessage.value = "视频总结已生成，字幕、思维导图和 AI 问答已可使用。";
   } catch (error) {
     if (runId !== analysisRunId.value) return;
+    clearAiProgressTimer();
     aiStatus.value = "error";
     aiMessage.value = error instanceof Error ? error.message : "AI 分析失败，请稍后重试。";
   }
@@ -781,6 +845,10 @@ onMounted(async () => {
   } catch {
     plans.value = [];
   }
+});
+
+onUnmounted(() => {
+  clearAiProgressTimer();
 });
 </script>
 
@@ -951,6 +1019,40 @@ onMounted(async () => {
                 <p class="mt-2 text-sm font-medium" :class="aiStatus === 'error' ? 'text-coral' : 'text-ink/58'">
                   {{ aiMessage }}
                 </p>
+                <div v-if="aiStatus === 'analyzing'" class="mt-3 max-w-xl">
+                  <div class="flex items-center justify-between gap-3 text-xs font-bold text-ink/50">
+                    <span>正在处理视频音频和字幕</span>
+                    <span>{{ aiProgressPercent }}%</span>
+                  </div>
+                  <div class="mt-2 h-2 overflow-hidden rounded-full bg-ink/8">
+                    <div
+                      class="h-full rounded-full bg-coral transition-all duration-700 ease-out"
+                      :style="{ width: `${aiProgressPercent}%` }"
+                    ></div>
+                  </div>
+                  <div class="mt-3 grid gap-2 sm:grid-cols-3">
+                    <div
+                      v-for="(step, index) in aiProgressSteps"
+                      :key="step.key"
+                      class="flex items-center gap-2 rounded-lg border px-2.5 py-2 text-xs font-bold"
+                      :class="
+                        index < activeAiStepIndex
+                          ? 'border-mint/40 bg-mint/12 text-emerald-700'
+                          : index === activeAiStepIndex
+                            ? 'border-coral/35 bg-coral/10 text-coral'
+                            : 'border-ink/8 bg-paper text-ink/38'
+                      "
+                    >
+                      <Check v-if="index < activeAiStepIndex" class="h-3.5 w-3.5 shrink-0" />
+                      <Loader2 v-else-if="index === activeAiStepIndex" class="h-3.5 w-3.5 shrink-0 animate-spin" />
+                      <span v-else class="h-3.5 w-3.5 shrink-0 rounded-full border border-current/30"></span>
+                      <span>{{ step.label }}</span>
+                    </div>
+                  </div>
+                  <p class="mt-2 text-xs leading-5 text-ink/45">
+                    抖音视频需要先抽取音频再转写，视频越长等待越久；转写完成后摘要会立即开始流式出现。
+                  </p>
+                </div>
               </div>
               <button
                 class="focus-ring inline-flex items-center justify-center gap-2 rounded-lg bg-coral px-4 py-3 text-sm font-black text-white hover:bg-coral/90 disabled:cursor-not-allowed disabled:opacity-55"

@@ -13,7 +13,9 @@ from starlette.concurrency import run_in_threadpool
 
 from app.config import get_settings
 from app.models import TranscriptSegment
+from app.services.asr_service import asr_service
 from app.services.bilibili_fallback import bilibili_fallback_service
+from app.services.douyin_fallback import douyin_fallback_service
 
 
 @dataclass(frozen=True)
@@ -25,26 +27,39 @@ class SubtitleTrack:
 
 
 class SubtitleService:
-    async def extract(self, url: str, language: str = "zh") -> tuple[str, list[TranscriptSegment]]:
+    async def extract(self, url: str, language: str = "zh", format_id: str = "best") -> tuple[str, list[TranscriptSegment]]:
+        if self._should_use_douyin_fallback(url, format_id):
+            return await self._extract_douyin(url, format_id)
+
         try:
             info = await run_in_threadpool(self._extract_info, url)
         except HTTPException as exc:
+            if self._should_use_douyin_fallback(url, format_id):
+                return await self._extract_douyin(url, format_id)
             if get_settings().browser_cookie_sources:
                 try:
                     info = await run_in_threadpool(self._extract_info_with_browser_cookies, url)
                 except HTTPException:
                     if bilibili_fallback_service.can_handle(url):
                         return await run_in_threadpool(bilibili_fallback_service.subtitles, url, language)
+                    if self._should_use_douyin_fallback(url, format_id):
+                        return await self._extract_douyin(url, format_id)
                     raise exc
             else:
                 if bilibili_fallback_service.can_handle(url):
                     return await run_in_threadpool(bilibili_fallback_service.subtitles, url, language)
+                if self._should_use_douyin_fallback(url, format_id):
+                    return await self._extract_douyin(url, format_id)
                 raise exc
         except Exception:
             if bilibili_fallback_service.can_handle(url):
                 return await run_in_threadpool(bilibili_fallback_service.subtitles, url, language)
+            if self._should_use_douyin_fallback(url, format_id):
+                return await self._extract_douyin(url, format_id)
             raise
         track = self._select_track(info, language)
+        if not track and self._should_use_douyin_fallback(url, format_id):
+            return await self._extract_douyin(url, format_id)
         if not track and get_settings().browser_cookie_sources:
             info = await run_in_threadpool(self._extract_info_with_browser_cookies, url)
             track = self._select_track(info, language)
@@ -65,6 +80,14 @@ class SubtitleService:
                 detail="当前视频字幕为空或无法解析，音频转写将在后续版本支持。",
             )
         return info.get("title") or "未命名视频", cleaned
+
+    def _should_use_douyin_fallback(self, url: str, format_id: str) -> bool:
+        return format_id.startswith("douyin-resolver-") or douyin_fallback_service.can_handle(url)
+
+    async def _extract_douyin(self, url: str, format_id: str) -> tuple[str, list[TranscriptSegment]]:
+        if asr_service.is_enabled():
+            return await run_in_threadpool(asr_service.transcribe, url, format_id)
+        return await run_in_threadpool(douyin_fallback_service.metadata_transcript, url)
 
     def _extract_info(self, url: str) -> dict[str, Any]:
         return self._extract_info_with_options(url, {})

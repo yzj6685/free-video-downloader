@@ -14,6 +14,11 @@ class Settings:
         self.deepseek_model = getenv("DEEPSEEK_MODEL", "deepseek-v4-pro").strip()
         self.ai_cache_ttl_seconds = int(getenv("AI_CACHE_TTL_SECONDS", "3600"))
         self.ai_max_transcript_chars = int(getenv("AI_MAX_TRANSCRIPT_CHARS", "24000"))
+        self.asr_provider = getenv("ASR_PROVIDER", "").strip().lower()
+        self.asr_max_seconds = int(getenv("ASR_MAX_SECONDS", "900"))
+        self.siliconflow_api_key = getenv("SILICONFLOW_API_KEY", "").strip()
+        self.siliconflow_base_url = getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1").strip().rstrip("/")
+        self.siliconflow_asr_model = getenv("SILICONFLOW_ASR_MODEL", "FunAudioLLM/SenseVoiceSmall").strip()
 
     @property
     def cookie_file_path(self) -> str | None:

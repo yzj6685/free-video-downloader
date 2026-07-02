@@ -75,7 +75,7 @@ export interface AiChatMessage {
 }
 
 export type AiAnalysisStreamEvent =
-  | { type: "status"; message: string }
+  | { type: "status"; message: string; stage?: string; progress?: number }
   | { type: "transcript_ready"; title: string; transcript_count: number; transcript_segments: TranscriptSegment[] }
   | { type: "summary_delta"; delta: string }
   | { type: "complete"; analysis: AiAnalysisResponse }

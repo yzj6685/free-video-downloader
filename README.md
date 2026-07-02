@@ -162,3 +162,18 @@ cd C:\code\ai-code\free-video-downloader
 .\tools\ffmpeg\bin\ffprobe.exe -version
 Invoke-RestMethod http://127.0.0.1:8001/api/health
 ```
+
+## SiliconFlow ASR
+
+抖音等平台没有公开视频字幕时，后端可以用 SiliconFlow ASR 从视频音频生成真实转写，再交给 AI 总结。不要把真实 API Key 写入仓库，启动后端前用环境变量注入：
+
+```powershell
+$env:SILICONFLOW_API_KEY="你的 SiliconFlow API Key"
+$env:ASR_PROVIDER="siliconflow"
+$env:SILICONFLOW_ASR_MODEL="FunAudioLLM/SenseVoiceSmall"
+$env:ASR_MAX_SECONDS="900"
+```
+
+未配置 `SILICONFLOW_API_KEY` 时，抖音总结会退回公开视频标题/文案兜底；配置后，抖音 `douyin-resolver-*` 格式会优先走 ffmpeg 抽音频和 SiliconFlow 转写。
+
+抖音 AI 总结失败的完整修复沉淀见：[docs/douyin-ai-summary-fix.md](docs/douyin-ai-summary-fix.md)。

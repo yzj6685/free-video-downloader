@@ -124,6 +124,24 @@ def test_subtitle_extract_uses_bilibili_fallback_when_ytdlp_fails(monkeypatch):
     assert segments[0].text == "B站字幕"
 
 
+def test_subtitle_extract_uses_douyin_metadata_when_subtitles_missing(monkeypatch):
+    def fake_metadata_transcript(url: str):
+        return "抖音公开视频标题", [TranscriptSegment(start=0, end=None, text="抖音公开视频文案")]
+
+    service = SubtitleService()
+    monkeypatch.setattr(service, "_extract_info", lambda url: {"title": "yt-dlp 标题", "subtitles": {}, "automatic_captions": {}})
+    monkeypatch.setattr("app.services.subtitle_service.douyin_fallback_service.can_handle", lambda url: True)
+    monkeypatch.setattr("app.services.subtitle_service.douyin_fallback_service.metadata_transcript", fake_metadata_transcript)
+
+    async def run():
+        return await service.extract("https://v.douyin.com/demo/", "zh", "douyin-resolver-cdn")
+
+    title, segments = asyncio.run(run())
+
+    assert title == "抖音公开视频标题"
+    assert segments[0].text == "抖音公开视频文案"
+
+
 def test_subtitle_selection_prefers_manual_chinese():
     service = SubtitleService()
     info = {
@@ -144,7 +162,8 @@ def test_subtitle_selection_prefers_manual_chinese():
 
 
 def test_ai_analyze_route_returns_structured_result(monkeypatch):
-    async def fake_extract(url: str, language: str):
+    async def fake_extract(url: str, language: str, format_id: str = "best"):
+        assert format_id == "douyin-resolver-cdn"
         return "测试视频", [
             TranscriptSegment(start=0, end=2, text="这是第一段知识点"),
             TranscriptSegment(start=2, end=4, text="这是第二段结论"),
@@ -158,7 +177,7 @@ def test_ai_analyze_route_returns_structured_result(monkeypatch):
     monkeypatch.setattr("app.services.ai_analysis_service.subtitle_service.extract", fake_extract)
     monkeypatch.setattr("app.services.ai_analysis_service.deepseek_client.stream_text", fake_stream_text)
 
-    response = client.post("/api/ai/analyze", json={"url": "https://example.com/video"})
+    response = client.post("/api/ai/analyze", json={"url": "https://example.com/video", "format_id": "douyin-resolver-cdn"})
 
     assert response.status_code == 200
     payload = response.json()
@@ -175,7 +194,8 @@ def test_ai_analyze_route_returns_structured_result(monkeypatch):
 
 
 def test_ai_analyze_stream_route_returns_sse_events(monkeypatch):
-    async def fake_analyze_stream(url: str, language: str):
+    async def fake_analyze_stream(url: str, language: str, format_id: str = "best"):
+        assert format_id == "douyin-resolver-cdn"
         yield {"type": "status", "message": "正在提取平台字幕..."}
         yield {"type": "summary_delta", "delta": "这是"}
         yield {"type": "summary_delta", "delta": "摘要"}
@@ -197,7 +217,7 @@ def test_ai_analyze_stream_route_returns_sse_events(monkeypatch):
 
     monkeypatch.setattr("app.routers.ai_analysis.ai_analysis_service.analyze_stream", fake_analyze_stream)
 
-    response = client.post("/api/ai/analyze-stream", json={"url": "https://example.com/video"})
+    response = client.post("/api/ai/analyze-stream", json={"url": "https://example.com/video", "format_id": "douyin-resolver-cdn"})
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")

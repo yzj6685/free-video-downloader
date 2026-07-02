@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import HTTPException
 
 from app.config import get_settings
-from app.models import DirectDownloadResponse, ProbeResponse, VideoFormat
+from app.models import DirectDownloadResponse, ProbeResponse, TranscriptSegment, VideoFormat
 
 
 PUBLIC_RESOLVER_ENDPOINTS = [
@@ -32,6 +34,18 @@ class DouyinFallbackService:
         if not media_url:
             raise HTTPException(status_code=502, detail="抖音解析源没有返回可下载的视频地址。")
         return DirectDownloadResponse(type="direct", url=media_url, filename=self._safe_filename(title, "mp4"))
+
+    def metadata_transcript(self, url: str) -> tuple[str, list[TranscriptSegment]]:
+        resolved_url, aweme_id = self._resolve_url_and_id(url)
+        payload = self._call_resolvers(resolved_url, aweme_id)
+        title = self._pick_title(payload) or f"抖音视频 {aweme_id}"
+        segments = self._metadata_segments(payload, title)
+        if not segments:
+            raise HTTPException(
+                status_code=422,
+                detail="当前抖音视频未返回可用于总结的公开文案，音频转写将在后续版本支持。",
+            )
+        return title, segments
 
     def _resolve_url_and_id(self, url: str) -> tuple[str, str]:
         resolved_url = url
@@ -59,17 +73,28 @@ class DouyinFallbackService:
                 continue
 
             if not self._is_success_payload(payload):
-                errors.append(f"{endpoint}: {payload.get('msg') or payload.get('message') or '解析失败'}")
+                errors.append(f"{endpoint}: {payload.get('msg') or payload.get('message') or 'parse failed'}")
                 continue
             if self._is_non_video_payload(payload):
                 raise HTTPException(status_code=422, detail="该抖音链接被识别为图集或非视频内容，首版只支持视频下载。")
             if self._pick_media_url(payload):
                 return payload
-            errors.append(f"{endpoint}: 解析成功但没有返回视频下载地址")
+            errors.append(f"{endpoint}: parsed successfully but did not include a video URL")
+
+        try:
+            payload = self._call_share_page(resolved_url, aweme_id)
+        except Exception as exc:
+            errors.append(f"share-page: {exc}")
+        else:
+            if self._is_non_video_payload(payload):
+                raise HTTPException(status_code=422, detail="该抖音链接被识别为图集或非视频内容，首版只支持视频下载。")
+            if self._pick_media_url(payload):
+                return payload
+            errors.append("share-page: parsed successfully but did not include a video URL")
 
         detail = (
             "抖音公开视频需要服务端签名解析。当前默认解析源未返回可下载地址，"
-            "可以配置 DOUYIN_RESOLVER_ENDPOINT 接入自建或商业解析服务后重试。"
+            "也未能从分享页读取视频地址，可以配置 DOUYIN_RESOLVER_ENDPOINT 接入自建或商业解析服务后重试。"
         )
         if errors:
             detail = f"{detail} 最近一次解析信息：{errors[-1]}"
@@ -88,6 +113,86 @@ class DouyinFallbackService:
         if not isinstance(payload, dict):
             raise ValueError("解析源返回了非 JSON 对象")
         return payload
+
+    def _call_share_page(self, resolved_url: str, aweme_id: str) -> dict[str, Any]:
+        share_url = self._share_page_url(resolved_url, aweme_id)
+        with httpx.Client(headers=self._mobile_headers(), follow_redirects=True, timeout=30) as client:
+            response = client.get(share_url)
+            response.raise_for_status()
+            html = response.text or ""
+        router_data = self._extract_router_data(html)
+        item = self._extract_item_from_router_data(router_data)
+        if not item:
+            raise ValueError("share page did not include video metadata")
+        return {
+            "code": 200,
+            "type": "视频",
+            "desc": item.get("desc"),
+            "author": item.get("author"),
+            "video": item.get("video"),
+            "aweme_detail": item,
+        }
+
+    def _share_page_url(self, resolved_url: str, aweme_id: str) -> str:
+        parsed = urlparse(resolved_url)
+        if "iesdouyin.com" in parsed.netloc and f"/{aweme_id}" in parsed.path:
+            return resolved_url
+        return f"https://www.iesdouyin.com/share/video/{aweme_id}/"
+
+    def _extract_router_data(self, html: str) -> dict[str, Any]:
+        marker = "window._ROUTER_DATA = "
+        start = html.find(marker)
+        if start < 0:
+            return {}
+
+        index = start + len(marker)
+        while index < len(html) and html[index].isspace():
+            index += 1
+        if index >= len(html) or html[index] != "{":
+            return {}
+
+        depth = 0
+        in_string = False
+        escaped = False
+        for cursor in range(index, len(html)):
+            char = html[cursor]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        payload = json.loads(html[index : cursor + 1])
+                    except ValueError:
+                        return {}
+                    return payload if isinstance(payload, dict) else {}
+        return {}
+
+    def _extract_item_from_router_data(self, router_data: dict[str, Any]) -> dict[str, Any]:
+        loader_data = router_data.get("loaderData")
+        if not isinstance(loader_data, dict):
+            return {}
+        for node in loader_data.values():
+            if not isinstance(node, dict):
+                continue
+            video_info = node.get("videoInfoRes")
+            if not isinstance(video_info, dict):
+                continue
+            item_list = video_info.get("item_list")
+            if isinstance(item_list, list) and item_list and isinstance(item_list[0], dict):
+                return item_list[0]
+        return {}
 
     def _normalize_probe(self, original_url: str, payload: dict[str, Any], aweme_id: str) -> ProbeResponse:
         title = self._pick_title(payload) or f"抖音视频 {aweme_id}"
@@ -133,10 +238,27 @@ class DouyinFallbackService:
             ("douyin-resolver-url", "抖音备用源 mp4", payload.get("url")),
             ("douyin-resolver-play-url", "抖音备用播放源 mp4", payload.get("play_url")),
             ("douyin-resolver-nested", "抖音嵌套播放源 mp4", self._pick_nested(payload, ["video", "play_addr", "url_list", 0])),
-            ("douyin-resolver-aweme", "抖音作品播放源 mp4", self._pick_nested(payload, ["aweme_detail", "video", "play_addr", "url_list", 0])),
+            (
+                "douyin-resolver-aweme",
+                "抖音作品播放源 mp4",
+                self._pick_nested(payload, ["aweme_detail", "video", "play_addr", "url_list", 0]),
+            ),
             ("douyin-resolver-data-video", "抖音数据源 mp4", self._pick_nested(payload, ["data", "video_url"])),
             ("douyin-resolver-data-download", "抖音数据下载源 mp4", self._pick_nested(payload, ["data", "download_url"])),
         ]
+        for index, item in enumerate(self._pick_nested(payload, ["video", "bit_rate"]) or []):
+            if not isinstance(item, dict):
+                continue
+            media_url = self._pick_nested(item, ["play_addr", "url_list", 0])
+            height = item.get("height")
+            width = item.get("width")
+            label = "抖音清晰源 mp4"
+            if width and height:
+                label = f"抖音清晰源 {width}x{height} mp4"
+            elif height:
+                label = f"抖音清晰源 {height}p mp4"
+            raw_candidates.append((f"douyin-resolver-bitrate-{index}", label, media_url))
+
         seen: set[str] = set()
         candidates: list[tuple[str, str, str]] = []
         for format_id, label, media_url in raw_candidates:
@@ -201,19 +323,51 @@ class DouyinFallbackService:
         )
 
     def _pick_duration(self, payload: dict[str, Any]) -> int | None:
-        value = payload.get("duration") or self._pick_nested(payload, ["video", "duration"])
+        value = (
+            payload.get("duration")
+            or self._pick_nested(payload, ["video", "duration"])
+            or self._pick_nested(payload, ["aweme_detail", "video", "duration"])
+        )
         if isinstance(value, int):
             return value // 1000 if value > 10000 else value
         return None
 
     def _pick_cover(self, payload: dict[str, Any]) -> str | None:
-        return (
+        cover = (
             payload.get("cover")
             or payload.get("cover_url")
-            or self._pick_nested(payload, ["video", "cover"])
             or self._pick_nested(payload, ["video", "cover", "url_list", 0])
+            or self._pick_nested(payload, ["video", "origin_cover", "url_list", 0])
+            or self._pick_nested(payload, ["video", "dynamic_cover", "url_list", 0])
             or self._pick_nested(payload, ["aweme_detail", "video", "cover", "url_list", 0])
         )
+        return cover if isinstance(cover, str) and cover.startswith("http") else None
+
+    def _metadata_segments(self, payload: dict[str, Any], title: str) -> list[TranscriptSegment]:
+        candidates = [
+            title,
+            payload.get("desc"),
+            payload.get("title"),
+            self._pick_nested(payload, ["aweme_detail", "desc"]),
+            self._pick_nested(payload, ["data", "desc"]),
+            self._pick_nested(payload, ["data", "title"]),
+        ]
+        texts: list[str] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            if not isinstance(candidate, str):
+                continue
+            text = self._clean_metadata_text(candidate)
+            if not text or text in seen or re.fullmatch(r"抖音视频\s+\d+", text):
+                continue
+            seen.add(text)
+            texts.append(text)
+        return [TranscriptSegment(start=float(index), end=None, text=text) for index, text in enumerate(texts)]
+
+    def _clean_metadata_text(self, value: str) -> str:
+        text = re.sub(r"https?://\S+", "", value)
+        text = re.sub(r"\s+", " ", text).strip(" \t\r\n，。；;")
+        return text
 
     def _pick_nested(self, payload: Any, path: list[str | int]) -> Any:
         value = payload
@@ -235,6 +389,15 @@ class DouyinFallbackService:
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             "Referer": "https://www.douyin.com/",
         }
+
+    def _mobile_headers(self) -> dict[str, str]:
+        headers = self._headers()
+        headers["User-Agent"] = (
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
+            "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 "
+            "Mobile/15E148 Safari/604.1"
+        )
+        return headers
 
     def _safe_filename(self, title: str, ext: str) -> str:
         cleaned = "".join(ch if ch.isalnum() or ch in " ._-" else "_" for ch in title)

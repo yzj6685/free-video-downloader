@@ -31,17 +31,30 @@ class AiAnalysisService:
     def __init__(self) -> None:
         self._cache: dict[str, CachedAnalysis] = {}
 
-    async def analyze(self, url: str, language: str = "zh") -> AiAnalysisResponse:
-        title, segments = await subtitle_service.extract(url, language)
+    async def analyze(self, url: str, language: str = "zh", format_id: str = "best") -> AiAnalysisResponse:
+        title, segments = await subtitle_service.extract(url, language, format_id)
         transcript_text = self._segments_to_text(segments)
         ai_payload = await self._summarize_transcript(title, transcript_text)
         response = self._build_response(url, title, segments, ai_payload)
         self._cache_response(response, transcript_text)
         return response
 
-    async def analyze_stream(self, url: str, language: str = "zh") -> AsyncIterator[dict[str, Any]]:
-        yield {"type": "status", "message": "AI 正在读取视频字幕..."}
-        title, segments = await subtitle_service.extract(url, language)
+    async def analyze_stream(self, url: str, language: str = "zh", format_id: str = "best") -> AsyncIterator[dict[str, Any]]:
+        if "douyin.com" in url or "iesdouyin.com" in url or format_id.startswith("douyin-resolver-"):
+            yield {
+                "type": "status",
+                "stage": "asr",
+                "progress": 12,
+                "message": "正在提取音频并进行语音转写，短视频通常需要 30-90 秒...",
+            }
+        else:
+            yield {
+                "type": "status",
+                "stage": "subtitle",
+                "progress": 18,
+                "message": "AI 正在读取视频字幕...",
+            }
+        title, segments = await subtitle_service.extract(url, language, format_id)
         transcript_text = self._segments_to_text(segments)
         yield {
             "type": "transcript_ready",
@@ -50,7 +63,7 @@ class AiAnalysisService:
             "transcript_segments": [segment.model_dump() for segment in segments],
         }
 
-        yield {"type": "status", "message": "AI 正在总结视频重点..."}
+        yield {"type": "status", "stage": "summary", "progress": 88, "message": "字幕已准备好，AI 正在总结视频重点..."}
         note_parts: list[str] = []
         async for chunk in self._stream_learning_note(title, transcript_text):
             note_parts.append(chunk)
@@ -151,7 +164,7 @@ class AiAnalysisService:
                 "content": (
                     "你是专业的视频内容整理助手。请用中文流式输出通用 Markdown 摘要。"
                     "用户解析的视频可能是学习、技术、美食、旅游、生活、娱乐等任意内容，"
-                    "所以不要固定写成学习笔记。只能基于字幕，不要编造。"
+                    "所以不要固定写成学习笔记。只能基于字幕、公开视频文案或标题，不要编造。"
                     "必须包含以下二级标题：## 视频概述、## 内容大纲。"
                     "视频概述用 1 到 2 个短段落说明视频主要内容，避免冗长。"
                     "内容大纲要精简，最多 5 个一级模块；每个模块最多 3 个子项。"
@@ -165,7 +178,7 @@ class AiAnalysisService:
                 "role": "user",
                 "content": (
                     f"视频标题：{title}\n"
-                    f"字幕内容：\n{transcript_text[: get_settings().ai_max_transcript_chars]}\n\n"
+                    f"字幕或文案内容：\n{transcript_text[: get_settings().ai_max_transcript_chars]}\n\n"
                     "请直接输出 Markdown，不要输出 JSON，不要解释你的生成过程。"
                 ),
             },

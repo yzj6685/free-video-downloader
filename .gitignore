@@ -23,3 +23,4 @@ __pycache__/
 
 # Local screenshots and temporary files
 *-screenshot.png
+.codex-*.log

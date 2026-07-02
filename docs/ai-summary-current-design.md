@@ -86,6 +86,12 @@
 - `VTT`：使用点号毫秒时间戳，并带 `WEBVTT` 文件头。
 - `TXT`：使用 `[mm:ss] 文本` 格式。
 
+## 抖音文案兜底
+
+抖音公开视频通常没有可提取的平台字幕。当前后端在前端传入 `douyin-resolver-*` 格式，或 URL 明确为抖音链接时，不再先尝试 `yt-dlp` 字幕提取，而是复用 `DouyinFallbackService` 的解析源，提取作品公开 `title/desc` 作为一段 `transcript_segments`，再进入 DeepSeek 摘要流程。
+
+该兜底只基于公开文案和标题，不伪造画面或语音内容；如果解析源没有返回可总结文案，仍返回 422，并提示后续需要音频 ASR 转写。
+
 ## 配置和安全
 
 DeepSeek Key 通过环境变量注入：
