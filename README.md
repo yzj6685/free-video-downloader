@@ -111,7 +111,7 @@ flowchart TB
 
 - Python 3.10+
 - Node.js 18+
-- ffmpeg（用于音视频合并，可参考 `scripts/install-ffmpeg.ps1`）
+- ffmpeg（用于高清音视频合并和 ASR 音频转写；Windows 可在克隆后运行 `.\scripts\install-ffmpeg.ps1`，详见 [本地运行指南](docs/local-run-guide.md)）
 - DeepSeek API Key（使用 AI 总结时需要）
 - SiliconFlow API Key（使用 ASR 转写时需要）
 - Stripe 测试密钥（验证会员支付时需要）

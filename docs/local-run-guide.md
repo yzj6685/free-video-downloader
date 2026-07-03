@@ -7,12 +7,46 @@
 - Python 3.10+
 - Node.js 18+
 - npm
-- ffmpeg
+- ffmpeg（推荐安装，用于高清音视频合并和无字幕视频的音频转写）
 
-ffmpeg 用于音视频合并和部分转写场景。Windows 可参考根目录脚本：
+如果只是先打开页面、体验普通链接解析，可以暂时跳过 ffmpeg；但下载某些高清合并格式、或使用 ASR 从视频中提取音频时需要它。
+
+Windows 用户可以在克隆项目后运行仓库自带脚本：
 
 ```powershell
 .\scripts\install-ffmpeg.ps1
+```
+
+这个脚本会下载 ffmpeg，并安装到项目目录：
+
+```text
+tools/ffmpeg/bin/ffmpeg.exe
+tools/ffmpeg/bin/ffprobe.exe
+```
+
+后端会自动识别这个目录，不需要手动加入系统 PATH。也可以自己安装 ffmpeg，并在 `.env` 中指定：
+
+```text
+FFMPEG_LOCATION=C:\path\to\ffmpeg\bin
+```
+
+验证 ffmpeg 是否可用：
+
+```powershell
+.\tools\ffmpeg\bin\ffmpeg.exe -version
+.\tools\ffmpeg\bin\ffprobe.exe -version
+```
+
+macOS / Linux 用户可以用系统包管理器安装，例如：
+
+```bash
+brew install ffmpeg
+```
+
+或：
+
+```bash
+sudo apt install ffmpeg
 ```
 
 ## 2. 克隆项目
