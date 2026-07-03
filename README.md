@@ -1,8 +1,17 @@
 # 一手遮天视频下载总结器
 
-一个面向公开可访问视频的下载与 AI 总结工具。用户粘贴视频链接后，可以解析视频信息、选择格式下载，并在登录后使用 AI 视频总结、字幕文本、思维导图和视频问答。
+一个基于 **Vue 3 + FastAPI + yt-dlp + DeepSeek + Stripe** 的全栈视频下载与 AI 总结项目。用户粘贴公开视频链接后，可以解析视频信息、选择格式下载，并在登录后使用 AI 视频总结、字幕文本、思维导图和视频问答。
 
-## 当前能力
+> 合规说明：项目只面向公开可访问、用户拥有权利或平台允许保存的视频内容；不提供 DRM 绕过、会员墙绕过、私密内容下载、公共账号 Cookie 注入等能力。
+
+## 面试官速览
+
+- **完整全栈闭环**：前端交互、FastAPI 后端、视频解析下载、AI 总结、账号认证、会员支付、Webhook 权益写入均已实现。
+- **真实业务复杂度**：覆盖 URL 兼容提取、B 站/抖音兜底解析、字幕提取、ASR 转写、SSE 流式输出、AI 问答上下文、Stripe Checkout 和本地 SQLite 权益模型。
+- **工程化材料完整**：包含需求分析、方案设计、支付接入、AI 总结设计、SEO/GEO 文件、测试用例和快速运行文档。
+- **可讲述亮点明确**：能围绕“公开视频解析下载 + AI 学习笔记 + 商业化会员权益”讲清楚产品价值、技术取舍和合规边界。
+
+## 核心能力
 
 - 单链接公开视频解析与下载，支持带 `https://`、不带协议的域名链接，以及夹在分享文案里的链接。
 - B 站公开视频兜底解析、封面代理、后端中转下载和字幕提取。
@@ -14,6 +23,21 @@
 - Stripe webhook 写入本地 SQLite 权益，已是 Pro 时防止重复支付。
 - SEO/GEO 基础文件：`llms.txt`、`ai-overview.md`、`humans.txt`、`robots.txt`、`sitemap.xml`。
 
+## 功能模块
+
+```mermaid
+flowchart LR
+  U[用户粘贴视频链接] --> P[视频解析]
+  P --> D[格式选择与下载]
+  P --> S[字幕提取]
+  S --> A[AI 总结]
+  A --> M[思维导图]
+  A --> Q[视频问答]
+  L[登录注册] --> A
+  B[Stripe 支付] --> E[Pro 权益]
+  E --> A
+```
+
 ## 技术栈
 
 - 前端：Vue 3 + Vite + TypeScript + Tailwind CSS
@@ -23,6 +47,20 @@
 - ASR：SiliconFlow
 - 支付：Stripe Checkout + Stripe webhook
 - 本地数据：SQLite
+
+## 架构设计
+
+```mermaid
+flowchart TB
+  Web[Vue 3 前端] --> Api[FastAPI API]
+  Api --> Ytdlp[yt-dlp 解析下载]
+  Api --> Fallback[平台兜底解析]
+  Api --> Subtitle[字幕服务]
+  Api --> ASR[SiliconFlow ASR]
+  Api --> LLM[DeepSeek]
+  Api --> Billing[Stripe Checkout / Webhook]
+  Api --> DB[(SQLite)]
+```
 
 ## 项目结构
 
@@ -60,6 +98,12 @@ Copy-Item .env.example .env
 真实密钥只写入 `.env`，不要提交到 Git。
 
 ## 本地启动
+
+前置要求：
+
+- Python 3.10+
+- Node.js 18+
+- ffmpeg（用于音视频合并，可参考 `scripts/install-ffmpeg.ps1`）
 
 后端：
 
@@ -143,6 +187,7 @@ cd web
 - [需求分析](docs/requirements-analysis.md)
 - [方案设计](docs/solution-design.md)
 - [项目总结](docs/project-summary.md)
+- [简历与面试速览](docs/resume.md)
 - [Stripe 支付接入说明](docs/stripe-billing.md)
 - [AI 总结当前设计](docs/ai-summary-current-design.md)
 - [抖音 AI 总结修复沉淀](docs/douyin-ai-summary-fix.md)
