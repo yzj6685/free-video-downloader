@@ -4,6 +4,8 @@
 
 ![项目首页](docs/images/homepage.png)
 
+![解析与 AI 总结结果](docs/images/analysis-result.png)
+
 ## 一、项目介绍
 
 很多公开视频适合离线保存、复盘学习或整理成资料，但原始视频往往时间长、信息密度高，只下载下来还不够方便复习。
