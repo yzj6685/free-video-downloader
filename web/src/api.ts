@@ -3,8 +3,12 @@ import type {
   AiAnalysisStreamEvent,
   AiChatResponse,
   AiChatStreamEvent,
+  AuthResponse,
+  AuthUser,
   BillingPlan,
+  CheckoutResponse,
   ComingSoonResponse,
+  EntitlementResponse,
   ProbeResponse,
 } from "./types";
 
@@ -50,13 +54,53 @@ export function fetchPlans() {
   return requestJson<{ plans: BillingPlan[] }>("/api/billing/plans").then((data) => data.plans);
 }
 
+export function createCheckout(email: string, planId = "pro") {
+  return requestJson<CheckoutResponse>("/api/billing/checkout", {
+    method: "POST",
+    body: JSON.stringify({ email, plan_id: planId }),
+  });
+}
+
+export function fetchEntitlement(email: string) {
+  const params = new URLSearchParams({ email });
+  return requestJson<EntitlementResponse>(`/api/billing/entitlement?${params.toString()}`);
+}
+
+export function registerUser(email: string, password: string) {
+  return requestJson<AuthResponse>("/api/auth/register", {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export function loginUser(email: string, password: string) {
+  return requestJson<AuthResponse>("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export function fetchCurrentUser(token: string) {
+  return requestJson<AuthUser>("/api/auth/me", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export async function logoutUser(token: string) {
+  await fetch("/api/auth/logout", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
 export function requestComingSoon(path: string) {
   return requestJson<ComingSoonResponse>(path, { method: "POST", body: JSON.stringify({}) });
 }
 
-export function analyzeVideo(url: string, formatId: string, language = "zh") {
+export function analyzeVideo(url: string, formatId: string, token: string, language = "zh") {
   return requestJson<AiAnalysisResponse>("/api/ai/analyze", {
     method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
     body: JSON.stringify({ url, format_id: formatId, language }),
   });
 }
@@ -64,12 +108,13 @@ export function analyzeVideo(url: string, formatId: string, language = "zh") {
 export async function analyzeVideoStream(
   url: string,
   formatId: string,
+  token: string,
   onEvent: (event: AiAnalysisStreamEvent) => void,
   language = "zh",
 ) {
   const response = await fetch("/api/ai/analyze-stream", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify({ url, format_id: formatId, language }),
   });
 
@@ -78,7 +123,7 @@ export async function analyzeVideoStream(
     const detail = typeof payload.detail === "string" ? payload.detail : "AI 分析失败，请稍后重试。";
     if (response.status === 404) {
       onEvent({ type: "status", message: "当前后端暂不支持流式分析，正在切换兼容模式..." });
-      const analysis = await analyzeVideo(url, formatId, language);
+      const analysis = await analyzeVideo(url, formatId, token, language);
       onEvent({ type: "summary_delta", delta: analysis.summary });
       onEvent({ type: "complete", analysis });
       return;
@@ -115,9 +160,10 @@ export async function analyzeVideoStream(
   }
 }
 
-export function chatWithVideo(analysisId: string, question: string) {
+export function chatWithVideo(analysisId: string, question: string, token: string) {
   return requestJson<AiChatResponse>("/api/ai/chat", {
     method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
     body: JSON.stringify({ analysis_id: analysisId, question }),
   });
 }
@@ -125,17 +171,18 @@ export function chatWithVideo(analysisId: string, question: string) {
 export async function chatWithVideoStream(
   analysisId: string,
   question: string,
+  token: string,
   onEvent: (event: AiChatStreamEvent) => void,
 ) {
   const response = await fetch("/api/ai/chat-stream", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify({ analysis_id: analysisId, question }),
   });
 
   if (!response.ok || !response.body) {
     if (response.status === 404) {
-      const result = await chatWithVideo(analysisId, question);
+      const result = await chatWithVideo(analysisId, question, token);
       onEvent({ type: "answer_delta", delta: result.answer });
       onEvent({ type: "complete", answer: result.answer, related_segments: result.related_segments, model: result.model });
       return;

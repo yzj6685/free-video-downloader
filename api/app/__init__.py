@@ -1,1 +1,1 @@
-"""FastAPI application package for the video downloader MVP."""
+"""FastAPI application package for the video downloader and AI summarizer."""

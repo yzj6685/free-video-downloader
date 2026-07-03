@@ -37,6 +37,31 @@ export interface ComingSoonResponse {
   message: string;
 }
 
+export interface CheckoutResponse {
+  checkout_url: string;
+  session_id: string;
+}
+
+export interface EntitlementResponse {
+  email: string;
+  plan_id?: string | null;
+  active: boolean;
+  free_limit: number;
+  free_used: number;
+  free_remaining: number;
+}
+
+export interface AuthUser {
+  id: number;
+  email: string;
+  created_at: string;
+}
+
+export interface AuthResponse {
+  token: string;
+  user: AuthUser;
+}
+
 export interface TranscriptSegment {
   start: number;
   end?: number | null;

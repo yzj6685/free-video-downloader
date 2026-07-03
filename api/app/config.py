@@ -3,6 +3,20 @@ from pathlib import Path
 from os import getenv
 
 
+def _load_env_files() -> None:
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+
+    project_root = Path(__file__).resolve().parents[2]
+    load_dotenv(project_root / ".env", override=False)
+    load_dotenv(project_root / "api" / ".env", override=False)
+
+
+_load_env_files()
+
+
 class Settings:
     def __init__(self) -> None:
         self.ytdlp_cookie_file = getenv("YTDLP_COOKIE_FILE", "").strip()
@@ -19,6 +33,13 @@ class Settings:
         self.siliconflow_api_key = getenv("SILICONFLOW_API_KEY", "").strip()
         self.siliconflow_base_url = getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1").strip().rstrip("/")
         self.siliconflow_asr_model = getenv("SILICONFLOW_ASR_MODEL", "FunAudioLLM/SenseVoiceSmall").strip()
+        self.stripe_secret_key = getenv("STRIPE_SECRET_KEY", "").strip()
+        self.stripe_webhook_secret = getenv("STRIPE_WEBHOOK_SECRET", "").strip()
+        self.stripe_product_name = getenv("STRIPE_PRODUCT_NAME", "一手遮天视频下载总结器 Pro").strip()
+        self.stripe_price_currency = getenv("STRIPE_PRICE_CURRENCY", "cny").strip().lower()
+        self.stripe_price_amount = int(getenv("STRIPE_PRICE_AMOUNT", "1990"))
+        self.app_public_url = getenv("APP_PUBLIC_URL", "http://127.0.0.1:5173").strip().rstrip("/")
+        self.billing_db_path = getenv("BILLING_DB_PATH", "").strip()
 
     @property
     def cookie_file_path(self) -> str | None:
@@ -52,6 +73,13 @@ class Settings:
             if (candidate / "ffmpeg.exe").exists() and (candidate / "ffprobe.exe").exists():
                 return str(candidate)
         return None
+
+    @property
+    def billing_database_path(self) -> str:
+        if self.billing_db_path:
+            return str(Path(self.billing_db_path).expanduser())
+        project_root = Path(__file__).resolve().parents[1]
+        return str(project_root / "billing.sqlite3")
 
 
 @lru_cache

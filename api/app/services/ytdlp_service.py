@@ -380,10 +380,10 @@ class YtDlpService:
             detail = "请输入正确的视频链接。"
             status = 400
         elif "private" in lowered or "login" in lowered or "sign in" in lowered:
-            detail = "该内容可能需要登录或权限，当前演示版暂不支持。"
+            detail = "该内容可能需要登录或权限，当前不支持解析或下载。"
             status = 403
         elif "copyright" in lowered or "drm" in lowered:
-            detail = "该内容受平台或版权限制，当前演示版不支持下载。"
+            detail = "该内容受平台或版权限制，当前不支持下载。"
             status = 403
         else:
             detail = "平台限制或链接已失效，建议更换链接重试。"

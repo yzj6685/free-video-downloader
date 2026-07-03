@@ -7,14 +7,13 @@ import {
   Captions,
   Check,
   ChevronDown,
-  ChevronRight,
   ClipboardCopy,
   Crown,
   Download,
   FileText,
   ImageDown,
-  Languages,
   Loader2,
+  LogOut,
   Maximize2,
   MessageCircle,
   LockKeyhole,
@@ -24,11 +23,10 @@ import {
   Sparkles,
   WandSparkles,
   X,
-  Zap,
 } from "lucide-vue-next";
 import { computed, onMounted, onUnmounted, ref } from "vue";
-import { analyzeVideoStream, chatWithVideoStream, fetchPlans, probeVideo, requestComingSoon, startDownload } from "./api";
-import type { AiAnalysisResponse, AiChatMessage, BillingPlan, ProbeResponse } from "./types";
+import { analyzeVideoStream, chatWithVideoStream, createCheckout, fetchCurrentUser, fetchEntitlement, fetchPlans, loginUser, logoutUser, probeVideo, registerUser, startDownload } from "./api";
+import type { AiAnalysisResponse, AiChatMessage, AuthUser, BillingPlan, ProbeResponse } from "./types";
 
 const videoUrl = ref("");
 const selectedFormat = ref("best");
@@ -37,6 +35,21 @@ const status = ref<"idle" | "probing" | "ready" | "downloading" | "error">("idle
 const message = ref("支持公开视频链接，粘贴后即可解析。");
 const plans = ref<BillingPlan[]>([]);
 const showPlans = ref(false);
+const showAuth = ref(false);
+const authMode = ref<"login" | "register">("login");
+const authEmail = ref("");
+const authPassword = ref("");
+const authStatus = ref<"idle" | "loading" | "error">("idle");
+const authMessage = ref("");
+const authToken = ref("");
+const currentUser = ref<AuthUser | null>(null);
+const billingEmail = ref("");
+const entitlementActive = ref(false);
+const freeAnalysisLimit = ref(3);
+const freeAnalysisUsed = ref(0);
+const freeAnalysisRemaining = ref(3);
+const checkoutStatus = ref<"idle" | "checking" | "redirecting" | "error">("idle");
+const checkoutMessage = ref("");
 const showToast = ref(false);
 const toastText = ref("");
 const aiStatus = ref<"idle" | "analyzing" | "ready" | "error">("idle");
@@ -70,6 +83,16 @@ interface MindMapNode {
 
 const canProbe = computed(() => videoUrl.value.trim().length > 5 && status.value !== "probing");
 const activeFormat = computed(() => selectedFormat.value || probeResult.value?.recommended_format_id || "best");
+const isLoggedIn = computed(() => Boolean(currentUser.value));
+const normalizedBillingEmail = computed(() => currentUser.value?.email.trim().toLowerCase() || "");
+const canStartCheckout = computed(() => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(normalizedBillingEmail.value));
+const canSubmitAuth = computed(() => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(authEmail.value.trim()) && authPassword.value.length >= 6);
+const aiLocked = computed(() => !isLoggedIn.value || (!entitlementActive.value && freeAnalysisRemaining.value <= 0));
+const aiAccessLabel = computed(() => {
+  if (!isLoggedIn.value) return "请先登录账号，免费版可体验 3 次 AI 视频总结。";
+  if (entitlementActive.value) return "Pro 已开通，AI 视频总结不限次数。";
+  return `免费版还可体验 ${freeAnalysisRemaining.value}/${freeAnalysisLimit.value} 次 AI 视频总结。`;
+});
 const aiProgressSteps = [
   { key: "subtitle", label: "读取字幕" },
   { key: "asr", label: "音频转写" },
@@ -126,12 +149,6 @@ const platformCards = [
   { title: "视频总结", tag: "AI 加值", tone: "bg-ink/8 text-ink", desc: "把长视频压缩成摘要、大纲、思维导图和可追问的学习笔记。" },
 ];
 
-const advancedActions = [
-  { title: "视频总结", desc: "把长视频变成重点摘要", icon: WandSparkles, path: "/api/ai/summary" },
-  { title: "字幕翻译", desc: "提取并生成双语字幕", icon: Languages, path: "/api/ai/translate-subtitles" },
-  { title: "音频提取", desc: "课程和播客一键转音频", icon: Captions, path: "" },
-  { title: "批量队列", desc: "多链接自动排队下载", icon: Zap, path: "" },
-];
 const aiTabs = [
   { key: "summary", label: "总结摘要", icon: BookOpen },
   { key: "transcript", label: "字幕文本", icon: Captions },
@@ -625,7 +642,14 @@ async function handleProbe() {
     aiMessage.value = "解析成功，正在自动生成 AI 内容摘要。";
     status.value = "ready";
     message.value = "解析成功，选择格式后即可下载。";
-    void handleAnalyze();
+    if (!aiLocked.value) {
+      void handleAnalyze();
+    } else {
+      aiStatus.value = "error";
+      aiMessage.value = isLoggedIn.value
+        ? "解析成功。免费 AI 总结次数已用完，开通 Pro 后可无限使用。"
+        : "解析成功。请先登录账号，免费版可体验 3 次 AI 视频总结。";
+    }
   } catch (error) {
     status.value = "error";
     message.value = error instanceof Error ? error.message : "解析失败，请稍后重试。";
@@ -692,6 +716,19 @@ async function handleAnalyze() {
     return;
   }
 
+  if (isLoggedIn.value && canStartCheckout.value) {
+    await refreshEntitlement(true);
+  }
+
+  if (aiLocked.value) {
+    aiStatus.value = "error";
+    aiMessage.value = isLoggedIn.value
+      ? "免费 AI 总结次数已用完，开通 Pro 后可无限使用。"
+      : "请先登录账号，免费版可体验 3 次 AI 视频总结。";
+    promptCheckoutForAi();
+    return;
+  }
+
   const runId = analysisRunId.value + 1;
   analysisRunId.value = runId;
   const analysisUrl = probeResult.value.url;
@@ -708,7 +745,7 @@ async function handleAnalyze() {
   startAiProgress("subtitle", 6);
 
   try {
-    await analyzeVideoStream(analysisUrl, analysisFormat, (event) => {
+    await analyzeVideoStream(analysisUrl, analysisFormat, authToken.value, (event) => {
       if (runId !== analysisRunId.value) return;
       if (event.type === "status") {
         aiMessage.value = event.message;
@@ -752,6 +789,7 @@ async function handleAnalyze() {
     aiStage.value = "complete";
     aiProgress.value = 100;
     aiMessage.value = "视频总结已生成，字幕、思维导图和 AI 问答已可使用。";
+    void refreshEntitlement(true);
   } catch (error) {
     if (runId !== analysisRunId.value) return;
     clearAiProgressTimer();
@@ -763,6 +801,10 @@ async function handleAnalyze() {
 async function handleAskAi(question?: string) {
   const finalQuestion = (question || aiQuestion.value).trim();
   if (!aiResult.value || !finalQuestion || aiChatStatus.value === "asking") return;
+  if (!isLoggedIn.value) {
+    promptCheckoutForAi();
+    return;
+  }
 
   aiChatStatus.value = "asking";
   aiQuestion.value = "";
@@ -773,7 +815,7 @@ async function handleAskAi(question?: string) {
     related_segments: [],
   });
   try {
-    await chatWithVideoStream(aiResult.value.analysis_id, finalQuestion, (event) => {
+    await chatWithVideoStream(aiResult.value.analysis_id, finalQuestion, authToken.value, (event) => {
       const current = aiChatHistory.value[historyIndex];
       if (!current) return;
       if (event.type === "related_segments") {
@@ -801,26 +843,6 @@ async function handleAskAi(question?: string) {
   }
 }
 
-async function handleAdvanced(path: string, title: string) {
-  if (title === "视频总结") {
-    await handleAnalyze();
-    return;
-  }
-
-  if (!path) {
-    showPlans.value = true;
-    showNotice(`${title} 是会员高级能力，首版暂未开放。`);
-    return;
-  }
-
-  try {
-    await requestComingSoon(path);
-  } catch (error) {
-    showPlans.value = true;
-    showNotice(error instanceof Error ? error.message : `${title} 即将开放。`);
-  }
-}
-
 async function copyTranscript() {
   if (!transcriptText.value) return;
   try {
@@ -839,11 +861,166 @@ function showNotice(text: string) {
   }, 3200);
 }
 
+function applyAuthSession(token: string, user: AuthUser) {
+  authToken.value = token;
+  currentUser.value = user;
+  billingEmail.value = user.email;
+  authEmail.value = user.email;
+  window.localStorage.setItem("auth_token", token);
+  window.localStorage.removeItem("billing_email");
+}
+
+async function restoreAuthSession() {
+  const token = window.localStorage.getItem("auth_token") || "";
+  if (!token) return;
+  try {
+    const user = await fetchCurrentUser(token);
+    applyAuthSession(token, user);
+  } catch {
+    window.localStorage.removeItem("auth_token");
+    window.localStorage.removeItem("billing_email");
+    authToken.value = "";
+    currentUser.value = null;
+    billingEmail.value = "";
+  }
+}
+
+async function handleAuthSubmit() {
+  if (!canSubmitAuth.value || authStatus.value === "loading") {
+    showNotice("请输入有效邮箱和至少 6 位密码。");
+    return;
+  }
+
+  authStatus.value = "loading";
+  authMessage.value = "";
+  try {
+    const email = authEmail.value.trim().toLowerCase();
+    const result =
+      authMode.value === "register"
+        ? await registerUser(email, authPassword.value)
+        : await loginUser(email, authPassword.value);
+    applyAuthSession(result.token, result.user);
+    authPassword.value = "";
+    showAuth.value = false;
+    showNotice(authMode.value === "register" ? "注册成功，已登录。" : "登录成功。");
+    await refreshEntitlement(true);
+  } catch (error) {
+    authStatus.value = "error";
+    authMessage.value = error instanceof Error ? error.message : "登录失败，请稍后重试。";
+  } finally {
+    authStatus.value = "idle";
+  }
+}
+
+async function handleLogout() {
+  const token = authToken.value;
+  authToken.value = "";
+  currentUser.value = null;
+  entitlementActive.value = false;
+  billingEmail.value = "";
+  freeAnalysisUsed.value = 0;
+  freeAnalysisRemaining.value = freeAnalysisLimit.value;
+  window.localStorage.removeItem("auth_token");
+  window.localStorage.removeItem("billing_email");
+  if (token) {
+    await logoutUser(token).catch(() => undefined);
+  }
+  showNotice("已退出登录。");
+}
+
+async function refreshEntitlement(silent = false) {
+  if (!isLoggedIn.value || !canStartCheckout.value) {
+    entitlementActive.value = false;
+    freeAnalysisUsed.value = 0;
+    freeAnalysisRemaining.value = freeAnalysisLimit.value;
+    checkoutMessage.value = "请先登录账号后查看免费次数和 Pro 权益。";
+    return;
+  }
+
+  checkoutStatus.value = "checking";
+  try {
+    const entitlement = await fetchEntitlement(normalizedBillingEmail.value);
+    entitlementActive.value = entitlement.active;
+    freeAnalysisLimit.value = entitlement.free_limit;
+    freeAnalysisUsed.value = entitlement.free_used;
+    freeAnalysisRemaining.value = entitlement.free_remaining;
+    if (entitlement.active) {
+      checkoutMessage.value = "Pro 已开通，AI 视频总结不限次数。";
+      if (!silent) showNotice("Pro 已开通，AI 视频总结不限次数。");
+    } else {
+      checkoutMessage.value = `免费版还可体验 ${entitlement.free_remaining}/${entitlement.free_limit} 次 AI 视频总结。`;
+    }
+  } catch (error) {
+    entitlementActive.value = false;
+    checkoutMessage.value = error instanceof Error ? error.message : "权益查询失败，请稍后重试。";
+    if (!silent) showNotice(checkoutMessage.value);
+  } finally {
+    checkoutStatus.value = "idle";
+  }
+}
+
+async function handleCheckout(planId = "pro") {
+  if (!isLoggedIn.value) {
+    authMode.value = "login";
+    showAuth.value = true;
+    showNotice("请先登录账号，再开通 Pro。");
+    return;
+  }
+  if (!canStartCheckout.value) {
+    showNotice("当前登录账号邮箱无效，无法绑定 Pro 权益。");
+    return;
+  }
+  await refreshEntitlement(true);
+  if (entitlementActive.value) {
+    checkoutMessage.value = "你已经是 Pro 会员，无需重复开通。";
+    showNotice("你已经是 Pro 会员，无需重复开通。");
+    return;
+  }
+  checkoutStatus.value = "redirecting";
+  checkoutMessage.value = "正在创建 Stripe 支付链接...";
+  try {
+    const result = await createCheckout(normalizedBillingEmail.value, planId);
+    window.location.href = result.checkout_url;
+  } catch (error) {
+    checkoutStatus.value = "error";
+    checkoutMessage.value = error instanceof Error ? error.message : "创建支付链接失败，请稍后重试。";
+    showNotice(checkoutMessage.value);
+  }
+}
+
+function promptCheckoutForAi() {
+  showPlans.value = true;
+  if (!isLoggedIn.value) {
+    authMode.value = "login";
+    showAuth.value = true;
+    showNotice("请先登录账号，免费版可体验 3 次 AI 视频总结。");
+    return;
+  }
+  showNotice("免费 AI 总结次数已用完，开通 Pro 后可无限使用。");
+}
+
 onMounted(async () => {
+  window.localStorage.removeItem("billing_email");
+  await restoreAuthSession();
+  authEmail.value = currentUser.value?.email || "";
   try {
     plans.value = await fetchPlans();
   } catch {
     plans.value = [];
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("checkout") === "success") {
+    checkoutMessage.value = "支付完成，正在刷新 Pro 权益...";
+    showNotice("支付完成，正在刷新权益。");
+    await refreshEntitlement(true);
+    window.history.replaceState({}, document.title, window.location.pathname + window.location.hash);
+  } else if (params.get("checkout") === "cancel") {
+    checkoutMessage.value = "支付已取消，未开通 Pro。";
+    showNotice("支付已取消。");
+    window.history.replaceState({}, document.title, window.location.pathname + window.location.hash);
+  } else if (canStartCheckout.value) {
+    await refreshEntitlement(true);
   }
 });
 
@@ -864,14 +1041,24 @@ onUnmounted(() => {
         </a>
         <div class="hidden items-center gap-6 text-sm text-ink/70 md:flex">
           <a href="#platforms" class="hover:text-ink">支持平台</a>
-          <a href="#ai" class="hover:text-ink">AI 功能</a>
+          <a href="#ai-citation" class="hover:text-ink">AI 功能</a>
           <a href="#faq" class="hover:text-ink">常见问题</a>
           <a href="#plans" class="hover:text-ink">会员权益</a>
         </div>
         <div class="flex items-center gap-2">
-          <button class="focus-ring hidden rounded-lg px-3 py-2 text-sm font-semibold text-ink/70 hover:bg-black/5 sm:inline-flex">
+          <button
+            v-if="!currentUser"
+            class="focus-ring inline-flex rounded-lg px-3 py-2 text-sm font-semibold text-ink/70 hover:bg-black/5"
+            @click="showAuth = true"
+          >
             登录
           </button>
+          <div v-if="currentUser" class="hidden items-center gap-2 sm:flex">
+            <span class="max-w-44 truncate text-sm font-bold text-ink/70">{{ currentUser.email }}</span>
+            <button class="focus-ring grid h-10 w-10 place-items-center rounded-lg bg-white text-ink shadow-lift hover:bg-black/5" aria-label="logout" @click="handleLogout">
+              <LogOut class="h-4 w-4" />
+            </button>
+          </div>
           <button
             class="focus-ring inline-flex items-center gap-2 rounded-lg bg-coral px-3 py-2 text-sm font-bold text-white shadow-lift hover:bg-coral/90"
             @click="showPlans = true"
@@ -898,7 +1085,7 @@ onUnmounted(() => {
             下载、字幕、<span class="text-coral">AI 总结</span>一步完成
           </p>
           <p class="mt-7 w-full max-w-2xl text-base leading-8 text-ink/68 sm:text-lg">
-            面向公开可访问视频的免费在线视频下载和 AI 视频总结工具，适合学习复盘、素材归档、公开课程离线保存。首版支持单链接解析下载、字幕提取、内容摘要、思维导图和视频问答。
+            面向公开可访问视频的免费在线视频下载和 AI 视频总结工具，适合学习复盘、素材归档、公开课程离线保存。支持单链接解析下载、字幕提取、内容摘要、思维导图和视频问答。
           </p>
         </div>
 
@@ -1019,6 +1206,7 @@ onUnmounted(() => {
                 <p class="mt-2 text-sm font-medium" :class="aiStatus === 'error' ? 'text-coral' : 'text-ink/58'">
                   {{ aiMessage }}
                 </p>
+                <p class="mt-1 text-xs font-bold text-ink/45">{{ aiAccessLabel }}</p>
                 <div v-if="aiStatus === 'analyzing'" class="mt-3 max-w-xl">
                   <div class="flex items-center justify-between gap-3 text-xs font-bold text-ink/50">
                     <span>正在处理视频音频和字幕</span>
@@ -1292,26 +1480,6 @@ onUnmounted(() => {
       </div>
     </section>
 
-    <section id="ai" class="section-shell pb-12">
-      <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <button
-          v-for="action in advancedActions"
-          :key="action.title"
-          class="tile group flex min-h-32 flex-col items-start p-4 text-left transition hover:-translate-y-1 hover:shadow-glow"
-          @click="handleAdvanced(action.path, action.title)"
-        >
-          <span class="mb-4 grid h-11 w-11 place-items-center rounded-lg bg-ink text-paper">
-            <component :is="action.icon" class="h-5 w-5" />
-          </span>
-          <strong class="text-lg text-ink">{{ action.title }}</strong>
-          <span class="mt-1 text-sm leading-6 text-ink/62">{{ action.desc }}</span>
-          <span class="mt-auto inline-flex items-center gap-1 pt-3 text-sm font-bold text-coral">
-            会员高级能力 <ChevronRight class="h-4 w-4 transition group-hover:translate-x-1" />
-          </span>
-        </button>
-      </div>
-    </section>
-
     <section id="ai-citation" class="section-shell pb-14">
       <div class="mx-auto max-w-4xl text-center">
         <p class="text-sm font-black uppercase text-coral">产品事实</p>
@@ -1334,9 +1502,6 @@ onUnmounted(() => {
         </article>
       </div>
 
-      <div class="mt-5 rounded-lg border border-ink/10 bg-white/60 px-4 py-3 text-sm font-medium leading-6 text-ink/58">
-        AI 可引用口径：一手遮天视频下载总结器把公开视频下载、字幕提取和 AI 视频总结放在同一个页面，适合课程复盘、素材归档和离线观看。
-      </div>
     </section>
 
     <section id="platforms" class="section-shell pb-14">
@@ -1379,14 +1544,19 @@ onUnmounted(() => {
     <section id="plans" class="border-y border-ink/10 bg-ink py-12 text-paper">
       <div class="section-shell grid gap-8 lg:grid-cols-[0.82fr_1.18fr] lg:items-center">
         <div>
-          <p class="text-sm font-black uppercase text-honey">会员转化预留</p>
-          <h2 class="mt-3 text-3xl font-black sm:text-4xl">免费下载只是开始，高频使用需要更强能力</h2>
+          <p class="text-sm font-black uppercase text-honey">会员权益</p>
+          <h2 class="mt-3 text-3xl font-black sm:text-4xl">免费体验 3 次 AI 总结，Pro 不限次数</h2>
           <p class="mt-4 leading-8 text-paper/68">
-            批量队列、AI 总结、字幕翻译、高清格式和团队协作会在后续阶段接入真实会员体系。
+            视频解析和下载保持免费；AI 视频总结、字幕整理、思维导图和视频问答可先免费体验 3 次，开通 Pro 后不限次数使用。
           </p>
         </div>
-        <div class="grid gap-4 sm:grid-cols-3">
-          <div v-for="plan in plans" :key="plan.id" class="rounded-lg border border-white/12 bg-white/8 p-4">
+        <div class="grid gap-4 sm:grid-cols-2">
+          <button
+            v-for="plan in plans"
+            :key="plan.id"
+            class="focus-ring rounded-lg border border-white/12 bg-white/8 p-4 text-left transition hover:border-white/35 hover:bg-white/12"
+            @click="plan.id === 'pro' ? handleCheckout(plan.id) : (showPlans = true)"
+          >
             <div class="flex items-center justify-between gap-2">
               <strong class="text-lg">{{ plan.name }}</strong>
               <span v-if="plan.badge" class="rounded-lg bg-honey px-2 py-1 text-xs font-black text-ink">{{ plan.badge }}</span>
@@ -1396,48 +1566,151 @@ onUnmounted(() => {
               <span class="pb-1 text-paper/55">/{{ plan.period }}</span>
             </div>
             <p class="mt-3 min-h-14 text-sm leading-6 text-paper/62">{{ plan.description }}</p>
-          </div>
+          </button>
         </div>
       </div>
     </section>
 
     <footer class="section-shell py-8 text-center text-sm text-ink/55">
-      一手遮天视频下载总结器 MVP · 请遵守平台规则和版权要求
+      一手遮天视频下载总结器 · 请遵守平台规则和版权要求
     </footer>
+
+    <div v-if="showAuth" class="fixed inset-0 z-50 grid place-items-center bg-ink/55 p-4 backdrop-blur-sm" @click.self="showAuth = false">
+      <div class="w-full max-w-md rounded-lg bg-paper p-5 shadow-glow">
+        <div class="mb-5 flex items-start justify-between gap-4">
+          <div>
+            <h2 class="text-2xl font-black text-ink">{{ authMode === "login" ? "登录账号" : "注册账号" }}</h2>
+            <p class="mt-1 text-sm leading-6 text-ink/62">登录后会自动使用账号邮箱查询 Pro 权益。</p>
+          </div>
+          <button class="focus-ring grid h-10 w-10 place-items-center rounded-lg bg-white text-ink shadow-lift" aria-label="close" @click="showAuth = false">
+            <X class="h-5 w-5" />
+          </button>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2 rounded-lg bg-white p-1">
+          <button
+            class="focus-ring rounded-lg px-3 py-2 text-sm font-black"
+            :class="authMode === 'login' ? 'bg-ink text-paper' : 'text-ink/60'"
+            @click="authMode = 'login'"
+          >
+            登录
+          </button>
+          <button
+            class="focus-ring rounded-lg px-3 py-2 text-sm font-black"
+            :class="authMode === 'register' ? 'bg-ink text-paper' : 'text-ink/60'"
+            @click="authMode = 'register'"
+          >
+            注册
+          </button>
+        </div>
+
+        <form class="mt-5 space-y-3" @submit.prevent="handleAuthSubmit">
+          <label class="block text-sm font-black text-ink" for="auth-email">邮箱</label>
+          <input
+            id="auth-email"
+            v-model="authEmail"
+            class="focus-ring h-12 w-full rounded-lg border border-ink/12 bg-white px-3 text-sm font-semibold text-ink"
+            placeholder="you@example.com"
+            type="email"
+            autocomplete="email"
+          />
+          <label class="block text-sm font-black text-ink" for="auth-password">密码</label>
+          <input
+            id="auth-password"
+            v-model="authPassword"
+            class="focus-ring h-12 w-full rounded-lg border border-ink/12 bg-white px-3 text-sm font-semibold text-ink"
+            placeholder="至少 6 位"
+            type="password"
+            autocomplete="current-password"
+          />
+          <p v-if="authMessage" class="text-sm font-semibold text-coral">{{ authMessage }}</p>
+          <button
+            class="focus-ring inline-flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-coral px-4 font-black text-white hover:bg-coral/90 disabled:cursor-not-allowed disabled:opacity-55"
+            :disabled="!canSubmitAuth || authStatus === 'loading'"
+            type="submit"
+          >
+            <Loader2 v-if="authStatus === 'loading'" class="h-4 w-4 animate-spin" />
+            <BadgeCheck v-else class="h-4 w-4" />
+            {{ authMode === "login" ? "登录" : "注册并登录" }}
+          </button>
+        </form>
+      </div>
+    </div>
 
     <div v-if="showPlans" class="fixed inset-0 z-50 grid place-items-center bg-ink/55 p-4 backdrop-blur-sm" @click.self="showPlans = false">
       <div class="max-h-[88vh] w-full max-w-5xl overflow-y-auto rounded-lg bg-paper p-4 shadow-glow sm:p-6">
         <div class="mb-5 flex items-start justify-between gap-4">
           <div>
             <h2 class="text-2xl font-black text-ink">选择适合你的下载方案</h2>
-            <p class="mt-1 text-ink/62">首版展示会员路径，真实支付会在第二阶段接入。</p>
+            <p class="mt-1 text-ink/62">免费版可体验 3 次 AI 视频总结，Pro 开通后不限次数。</p>
           </div>
           <button class="focus-ring rounded-lg bg-white px-3 py-2 font-bold text-ink shadow-lift" @click="showPlans = false">
             关闭
           </button>
         </div>
 
-        <div class="grid gap-4 md:grid-cols-3">
-          <article v-for="plan in plans" :key="plan.id" class="rounded-lg border border-ink/10 bg-white p-5 shadow-lift">
-            <div class="flex items-center justify-between gap-2">
-              <h3 class="text-xl font-black text-ink">{{ plan.name }}</h3>
-              <span v-if="plan.badge" class="rounded-lg bg-coral px-2 py-1 text-xs font-black text-white">{{ plan.badge }}</span>
+        <div class="mb-5 rounded-lg border border-ink/10 bg-white p-4">
+          <label class="text-sm font-black text-ink" for="billing-email">账号邮箱</label>
+          <div class="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+            <input
+              id="billing-email"
+              v-model="billingEmail"
+              class="focus-ring h-11 rounded-lg border border-ink/12 bg-paper px-3 text-sm font-semibold text-ink"
+              :placeholder="isLoggedIn ? '当前登录账号邮箱' : '请先登录账号'"
+              type="email"
+              readonly
+              :disabled="!isLoggedIn"
+            />
+            <button
+              class="focus-ring inline-flex items-center justify-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-black text-ink shadow-lift disabled:opacity-55"
+              :disabled="!isLoggedIn || !canStartCheckout || checkoutStatus === 'checking'"
+              @click="refreshEntitlement()"
+            >
+              <Loader2 v-if="checkoutStatus === 'checking'" class="h-4 w-4 animate-spin" />
+              <BadgeCheck v-else class="h-4 w-4" />
+              查询权益
+            </button>
+            <span
+              class="inline-flex items-center justify-center rounded-lg px-3 py-2 text-sm font-black"
+              :class="entitlementActive ? 'bg-mint/18 text-emerald-700' : 'bg-coral/10 text-coral'"
+            >
+              {{ !isLoggedIn ? "未登录" : entitlementActive ? "已开通 Pro" : `剩余 ${freeAnalysisRemaining} 次` }}
+            </span>
+          </div>
+          <p class="mt-2 text-sm text-ink/58">{{ checkoutMessage || aiAccessLabel }}</p>
+        </div>
+
+        <div class="grid gap-4 md:grid-cols-2">
+          <article v-for="plan in plans" :key="plan.id" class="flex min-h-[476px] flex-col rounded-lg border border-ink/10 bg-white p-5 shadow-lift">
+            <div>
+              <div class="flex items-center justify-between gap-2">
+                <h3 class="text-xl font-black text-ink">{{ plan.name }}</h3>
+                <span v-if="plan.badge" class="rounded-lg bg-coral px-2 py-1 text-xs font-black text-white">{{ plan.badge }}</span>
+              </div>
+              <div class="mt-4 flex items-end gap-1 text-ink">
+                <span class="text-4xl font-black">{{ plan.price }}</span>
+                <span class="pb-1 text-ink/55">/{{ plan.period }}</span>
+              </div>
+              <p class="mt-3 min-h-14 text-sm leading-6 text-ink/62">{{ plan.description }}</p>
+              <ul class="mt-4 space-y-2">
+                <li v-for="feature in plan.features" :key="feature.label" class="flex items-center gap-2 text-sm font-semibold text-ink/72">
+                  <Check class="h-4 w-4" :class="feature.highlighted ? 'text-coral' : 'text-emerald-600'" />
+                  {{ feature.label }}
+                </li>
+              </ul>
             </div>
-            <div class="mt-4 flex items-end gap-1 text-ink">
-              <span class="text-4xl font-black">{{ plan.price }}</span>
-              <span class="pb-1 text-ink/55">/{{ plan.period }}</span>
-            </div>
-            <p class="mt-3 min-h-14 text-sm leading-6 text-ink/62">{{ plan.description }}</p>
-            <ul class="mt-4 space-y-2">
-              <li v-for="feature in plan.features" :key="feature.label" class="flex items-center gap-2 text-sm font-semibold text-ink/72">
-                <Check class="h-4 w-4" :class="feature.highlighted ? 'text-coral' : 'text-emerald-600'" />
-                {{ feature.label }}
-              </li>
-            </ul>
-            <button class="focus-ring mt-5 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-ink px-4 py-3 font-black text-paper hover:bg-coal">
+            <button
+              class="focus-ring mt-auto inline-flex h-[60px] w-full items-center justify-center gap-2 rounded-lg bg-ink px-4 py-3 font-black text-paper hover:bg-coal disabled:cursor-not-allowed disabled:opacity-55"
+              :disabled="plan.id === 'pro' && checkoutStatus === 'redirecting'"
+              @click="
+                plan.id === 'pro'
+                  ? handleCheckout(plan.id)
+                  : (showPlans = false)
+              "
+            >
               <LockKeyhole v-if="plan.id !== 'free'" class="h-4 w-4" />
               <BadgeCheck v-else class="h-4 w-4" />
-              {{ plan.cta }}
+              {{ plan.id === "pro" && checkoutStatus === "redirecting" ? "跳转 Stripe..." : plan.cta }}
             </button>
           </article>
         </div>

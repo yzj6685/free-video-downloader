@@ -1,179 +1,148 @@
-# 万能视频下载器
+# 一手遮天视频下载总结器
 
-一个面向本地演示的万能视频下载网站 MVP：复制视频链接，解析视频信息，选择格式并下载到本地。首版聚焦单链接下载和高转化会员入口，同时为批量下载、视频总结、字幕翻译、真实付费能力预留接口与文档。
+一个面向公开可访问视频的下载与 AI 总结工具。用户粘贴视频链接后，可以解析视频信息、选择格式下载，并在登录后使用 AI 视频总结、字幕文本、思维导图和视频问答。
+
+## 当前能力
+
+- 单链接公开视频解析与下载，支持带 `https://`、不带协议的域名链接，以及夹在分享文案里的链接。
+- B 站公开视频兜底解析、封面代理、后端中转下载和字幕提取。
+- 抖音公开视频兜底解析、多格式展示、视频预览、文件大小探测和 SiliconFlow ASR 转写。
+- DeepSeek AI 总结：摘要、大纲、知识点、字幕文本、思维导图和视频问答。
+- 登录/注册、会话恢复和退出登录。
+- 免费账号可体验 3 次 AI 视频总结。
+- Stripe Checkout 一次性购买 Pro，Pro 会员 AI 视频总结不限次数。
+- Stripe webhook 写入本地 SQLite 权益，已是 Pro 时防止重复支付。
+- SEO/GEO 基础文件：`llms.txt`、`ai-overview.md`、`humans.txt`、`robots.txt`、`sitemap.xml`。
 
 ## 技术栈
 
 - 前端：Vue 3 + Vite + TypeScript + Tailwind CSS
 - 后端：Python + FastAPI
-- 下载能力：yt-dlp
-- 首版数据：无数据库，静态套餐与无状态接口
+- 下载解析：yt-dlp + 平台兜底解析
+- AI 总结：DeepSeek
+- ASR：SiliconFlow
+- 支付：Stripe Checkout + Stripe webhook
+- 本地数据：SQLite
 
 ## 项目结构
 
 ```text
 .
-├── api/                         # FastAPI 后端
-│   ├── app/
-│   │   ├── main.py              # API 入口
-│   │   ├── models.py            # 请求/响应模型
-│   │   ├── routers/             # API 路由
-│   │   └── services/            # yt-dlp、套餐、能力封装
-│   ├── requirements.txt
-│   └── tests/
-├── docs/
-│   ├── requirements-analysis.md # 需求分析沉淀
-│   └── solution-design.md       # 方案设计沉淀
-└── web/                         # Vue 前端
+├─ api/                         # FastAPI 后端
+│  ├─ app/
+│  │  ├─ main.py                # API 入口
+│  │  ├─ models.py              # 请求/响应模型
+│  │  ├─ routers/               # video / auth / billing / ai 路由
+│  │  └─ services/              # 解析、下载、AI、ASR、支付、认证服务
+│  ├─ requirements.txt
+│  └─ tests/
+├─ docs/                        # 需求、设计、支付和阶段总结
+└─ web/                         # Vue 前端
 ```
+
+## 环境变量
+
+复制 `.env.example` 为 `.env`，按需填写：
+
+```powershell
+Copy-Item .env.example .env
+```
+
+核心配置：
+
+- `DEEPSEEK_API_KEY`：DeepSeek API Key。
+- `SILICONFLOW_API_KEY`：SiliconFlow ASR API Key。
+- `STRIPE_SECRET_KEY`：Stripe Secret Key。
+- `STRIPE_WEBHOOK_SECRET`：Stripe webhook secret。
+- `APP_PUBLIC_URL`：前端公开地址，本地常用 `http://127.0.0.1:5174`。
+- `BILLING_DB_PATH`：可选，默认使用 `api/billing.sqlite3`。
+
+真实密钥只写入 `.env`，不要提交到 Git。
 
 ## 本地启动
 
-### 1. 后端
+后端：
 
 ```powershell
 cd api
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8001
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8002
 ```
 
-后端依赖 `yt-dlp`。`requirements.txt` 已包含 Python 包版本；如果想使用系统级命令，也可以额外安装：
-
-```powershell
-pip install -U yt-dlp
-```
-
-部分高清格式合并需要 `ffmpeg`。未安装时基础解析和部分下载仍可用，但合并音视频的格式可能不可用。
-
-### 2. 前端
+前端：
 
 ```powershell
 cd web
 npm install
-npm run dev
-```
-
-默认前端会代理 `/api` 到 `http://127.0.0.1:8001`。如果你希望使用 `8000`，可通过 `VITE_API_PROXY_TARGET` 覆盖。
-
-如果本机 `5173` 已被占用，可以改用：
-
-```powershell
-cd api
-.\.venv\Scripts\Activate.ps1
-python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8001
-
-cd ..\web
-$env:VITE_API_PROXY_TARGET="http://127.0.0.1:8001"
+$env:VITE_API_PROXY_TARGET="http://127.0.0.1:8002"
 npm run dev:local
 ```
 
-## 关键接口
+访问：
 
-- `GET /api/health`：检查 API、yt-dlp、ffmpeg 状态
-- `POST /api/probe`：解析单个视频链接
-- `POST /api/download`：下载，优先返回直链，失败时中转
-- `GET /api/capabilities`：返回首版能力说明
-- `POST /api/ai/summary`：视频总结预留接口
-- `POST /api/ai/translate-subtitles`：字幕翻译预留接口
-- `GET /api/billing/plans`：返回静态会员套餐
-
-## 抖音、B站等平台 Cookie 说明
-
-部分平台会对网页端解析做访客校验。典型表现：
-
-- 抖音短链返回 `Fresh cookies are needed`
-- B站返回 `HTTP Error 412: Precondition Failed`
-
-这不是输入框或前端问题，而是平台要求请求携带新鲜的游客 Cookie 或用户主动提供的 Cookie。下载解析链路默认优先使用公开页面、平台公开接口和后端兜底解析；需要解析必须登录态的内容时，仍建议由用户主动导出 `cookies.txt`，然后配置：
-
-```powershell
-$env:YTDLP_COOKIE_FILE="C:\path\to\cookies.txt"
-cd api
-.\.venv\Scripts\Activate.ps1
-python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8001
+```text
+http://127.0.0.1:5174
 ```
 
-配置成功后，`GET /api/health` 中的 `cookie_file_configured` 会显示为 `true`。请只为你有权访问和平台允许保存的内容提供 Cookie。
+## Stripe 本地验收
+
+1. 安装并登录 Stripe CLI。
+2. 启动后端。
+3. 转发 webhook：
+
+```powershell
+stripe listen --forward-to localhost:8002/api/billing/webhook
+```
+
+4. 把 CLI 输出的 `whsec_...` 写入 `.env` 的 `STRIPE_WEBHOOK_SECRET`。
+5. 登录网站账号，点击 Pro 套餐，跳转 Stripe Checkout。
+6. 使用 Stripe 测试卡完成支付。
+7. 支付成功回到首页后，当前账号应显示 Pro 已开通。
+
+详细说明见 [docs/stripe-billing.md](docs/stripe-billing.md)。
+
+## 关键接口
+
+- `GET /api/health`：健康检查。
+- `POST /api/auth/register`：注册。
+- `POST /api/auth/login`：登录。
+- `GET /api/auth/me`：读取当前用户。
+- `POST /api/probe`：解析视频链接。
+- `POST /api/download`：生成下载交付信息。
+- `GET /api/download/file`：后端中转下载文件。
+- `GET /api/media/thumbnail`：封面代理。
+- `GET /api/media/video-preview`：视频预览流。
+- `GET /api/billing/plans`：套餐列表。
+- `GET /api/billing/entitlement`：查询 Pro 权益和免费次数。
+- `POST /api/billing/checkout`：创建 Stripe Checkout。
+- `POST /api/billing/webhook`：Stripe webhook。
+- `POST /api/ai/analyze-stream`：流式 AI 视频总结。
+- `POST /api/ai/chat-stream`：流式视频问答。
 
 ## 测试
 
 ```powershell
 cd api
-python -m pytest
+.\.venv\Scripts\python.exe -m pytest
 ```
 
 ```powershell
 cd web
-npm run typecheck
-npm run build
+.\node_modules\.bin\vue-tsc.cmd --noEmit
+.\node_modules\.bin\vite.cmd build
 ```
+
+## 合规边界
+
+本项目只面向公开或用户有权访问的视频内容。请仅下载你拥有权利或平台允许保存的内容。不提供 DRM 绕过、破解、会员墙绕过、私密内容下载、公共账号 Cookie 注入等能力。
 
 ## 文档
 
 - [需求分析](docs/requirements-analysis.md)
 - [方案设计](docs/solution-design.md)
-
-后续 AI 或开发者继续扩展功能前，应先阅读这两份文档，并在功能范围或架构发生变化时同步更新。
-
-## 合规边界
-
-本项目基于 yt-dlp 支持公开或用户有权限访问的视频链接解析与下载。请仅下载你拥有权利或平台允许保存的内容。首版不提供 DRM 绕过、破解、盗取登录态、规避会员墙或下载私密内容的能力。
-## 当前解析兜底实现
-
-- B 站：当 `yt-dlp` 触发 412 或游客校验时，后端会尝试读取公开页面中的 `window.__INITIAL_STATE__`，再调用 B 站 HTML5 播放地址接口获取可下载的 mp4，并通过 `/api/download/file` 走后端中转下载。
-- 抖音：当 `yt-dlp` 提示 fresh cookies 时，后端不会读取用户浏览器 Cookie，也不会要求用户手填 Cookie。当前实现会先使用 `DOUYIN_RESOLVER_ENDPOINT` 指定的自建/商业解析源；未配置时，尝试默认公开解析源 `https://api.mmp.cc/api/Jiexi`，支持返回 `video.cdn_url` 或 `video.video_url` 后生成直链下载。
-- 抖音图集：如果解析源识别为图集或非视频内容，首版会返回明确提示，避免误判为视频解析失败。
-- 生产建议：公开解析源稳定性不可控，正式上线建议配置 `DOUYIN_RESOLVER_ENDPOINT` 接入自建签名解析服务或商业 API。该接口可配置多个地址，用英文逗号分隔。
-
-端到端烟测：
-
-```powershell
-cd C:\code\ai-code\free-video-downloader
-& 'C:\Users\yzj\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe' web\scripts\e2e-smoke.mjs
-```
-
-该脚本会通过前端同源 `/api` 路径验证 B 站解析/中转下载，以及抖音解析/直链采样下载。可以通过 `E2E_DOUYIN_URL` 替换抖音测试链接。
-
-## 当前交互修复记录
-
-- 视频封面不再由浏览器直接访问平台图片地址，而是统一走 `/api/media/thumbnail`。后端会根据原视频链接或图片域名补充合适的 `Referer`，解决 B 站、抖音等平台图片防盗链导致的封面裂图问题。
-- 下载按钮不再使用 `window.open` 打开新标签页。前端会创建临时 `<a download>` 触发下载；B 站和抖音兜底链路都会返回同源 `/api/download/file` 地址，因此不会跳到 `about:blank` 或外部空白页。
-- `web/scripts/e2e-smoke.mjs` 已覆盖 B 站封面代理、B 站同源下载代理、抖音同源下载代理。
-
-## 抖音解析体验修复记录
-
-- 抖音解析源如果不返回封面图，前端会使用 `/api/media/video-preview` 加载视频首帧作为卡片预览，不再只显示播放占位图。
-- `/api/media/video-preview` 支持 `Range` 请求，默认只返回小片段，避免为了卡片预览拉完整视频。
-- 抖音格式列表不再固定为一个选项。后端会从解析源返回的 `video.cdn_url`、`video.video_url` 等字段生成多个可选格式。
-- 抖音格式会通过 HEAD 请求探测 `Content-Length`，前端可以显示真实大小，例如 `44.2 MB`，不再显示“大小未知”。
-
-## FFmpeg 本地依赖
-
-项目已支持自动使用项目内置 FFmpeg：`tools/ffmpeg/bin/ffmpeg.exe` 和 `tools/ffmpeg/bin/ffprobe.exe`。后端启动时会优先读取环境变量 `FFMPEG_LOCATION`，未配置时自动查找项目内置路径。
-
-这解决了健康检查里 `ffmpeg_available=false` 的问题，也让 `yt-dlp` 在需要音视频合并、转封装或探测媒体信息时有可用的 FFmpeg 工具链。
-
-可手动验证：
-
-```powershell
-.\tools\ffmpeg\bin\ffmpeg.exe -version
-.\tools\ffmpeg\bin\ffprobe.exe -version
-Invoke-RestMethod http://127.0.0.1:8001/api/health
-```
-
-## SiliconFlow ASR
-
-抖音等平台没有公开视频字幕时，后端可以用 SiliconFlow ASR 从视频音频生成真实转写，再交给 AI 总结。不要把真实 API Key 写入仓库，启动后端前用环境变量注入：
-
-```powershell
-$env:SILICONFLOW_API_KEY="你的 SiliconFlow API Key"
-$env:ASR_PROVIDER="siliconflow"
-$env:SILICONFLOW_ASR_MODEL="FunAudioLLM/SenseVoiceSmall"
-$env:ASR_MAX_SECONDS="900"
-```
-
-未配置 `SILICONFLOW_API_KEY` 时，抖音总结会退回公开视频标题/文案兜底；配置后，抖音 `douyin-resolver-*` 格式会优先走 ffmpeg 抽音频和 SiliconFlow 转写。
-
-抖音 AI 总结失败的完整修复沉淀见：[docs/douyin-ai-summary-fix.md](docs/douyin-ai-summary-fix.md)。
+- [项目总结](docs/project-summary.md)
+- [Stripe 支付接入说明](docs/stripe-billing.md)
+- [AI 总结当前设计](docs/ai-summary-current-design.md)
+- [抖音 AI 总结修复沉淀](docs/douyin-ai-summary-fix.md)

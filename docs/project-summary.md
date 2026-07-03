@@ -1,213 +1,109 @@
-# 万能视频下载器阶段总结
+# 项目总结
 
 ## 当前状态
 
-项目已经完成本地 MVP 的核心闭环：前端可粘贴单个公开视频链接，后端解析视频信息，前端展示标题、作者、时长、格式、大小、封面或视频预览，并可触发下载。
+《一手遮天视频下载总结器》已经完成视频下载、AI 总结、登录注册、免费次数、Stripe 支付和 Pro 权益闭环。
 
-当前本地服务端口：
+当前本地服务：
 
 - 前端：`http://127.0.0.1:5174`
-- 后端：`http://127.0.0.1:8001`
+- 后端：`http://127.0.0.1:8002`
 
-当前健康检查预期：
+## 已完成能力
 
-```json
-{
-  "status": "ok",
-  "yt_dlp_available": true,
-  "ffmpeg_available": true
-}
-```
-
-## 已实现能力
-
-- Vue 3 + Vite + Tailwind CSS 前端首页。
-- FastAPI 后端接口。
-- `yt-dlp` 通用解析能力。
-- B 站公开视频兜底解析与后端中转下载。
-- 抖音公开视频兜底解析，不要求用户提供 Cookie。
-- 抖音多格式展示：从解析源返回的 `cdn_url`、`video_url` 等字段生成多个格式。
-- 抖音格式大小展示：通过 HEAD 探测 `Content-Length`，填充 `filesize`。
-- 封面代理：`/api/media/thumbnail` 解决平台图片防盗链。
-- 抖音无封面兜底：`/api/media/video-preview` 使用视频首帧预览，并支持 Range 小片段请求。
-- 下载交付统一走同源代理优先，前端用 `<a download>` 触发，不再打开 `about:blank` 空白页。
-- 静态会员套餐、AI 功能占位接口、能力说明接口。
-- AI 视频分析：解析视频后提取平台字幕，调用 DeepSeek 生成摘要、大纲、核心知识点、转录文本，并支持视频内容问答。
-- 前端同屏工作台：解析成功后视频信息/下载区与 AI 总结区左右并排展示，AI 总结自动触发，用户无需二次点击。
-- 本地 FFmpeg 支持：后端会优先读取 `FFMPEG_LOCATION`，否则自动查找 `tools/ffmpeg/bin`。
+- 单链接公开视频解析与下载。
+- URL 输入兼容：支持 `https://...`、`www.xxx.com/...`、`xxx.com/...` 和分享文案中的链接。
+- B 站公开视频兜底解析、字幕提取、封面代理和后端中转下载。
+- 抖音公开视频兜底解析、多格式展示、视频预览、大小探测和 ASR 转写。
+- DeepSeek AI 总结：摘要、大纲、知识点、字幕文本、思维导图和视频问答。
+- SiliconFlow ASR：抖音等无公开字幕视频可通过音频转写生成真实字幕。
+- 登录、注册、会话恢复和退出登录。
+- 免费账号 3 次 AI 视频总结额度。
+- Stripe Checkout 一次性购买 Pro。
+- Stripe webhook 写入本地 SQLite 权益。
+- Pro 会员 AI 视频总结不限次数。
+- 已开通 Pro 时防止重复支付。
+- 前端会员弹窗、套餐展示、支付回跳、权益刷新和错误提示。
+- SEO/GEO 相关公开文件和结构化数据。
 
 ## 关键接口
 
-- `GET /api/health`：检查 API、yt-dlp、FFmpeg 状态。
-- `POST /api/probe`：解析单个视频链接。
-- `POST /api/download`：生成下载交付信息。
-- `GET /api/download/file`：后端中转下载文件。
-- `GET /api/media/thumbnail`：代理封面图片。
-- `GET /api/media/video-preview`：视频预览流，主要用于抖音无封面兜底。
-- `GET /api/capabilities`：首版能力说明。
-- `GET /api/billing/plans`：静态会员套餐。
-- `POST /api/ai/summary`：视频总结占位。
-- `POST /api/ai/translate-subtitles`：字幕翻译占位。
-- `POST /api/ai/analyze`：基于平台字幕生成 AI 内容摘要，兼容非流式调用。
-- `POST /api/ai/analyze-stream`：流式生成 AI 内容摘要，当前前端主要使用。
-- `POST /api/ai/chat`：基于当前分析结果追问视频内容，兼容非流式调用。
-- `POST /api/ai/chat-stream`：流式输出 AI 问答，当前前端主要使用。
+- `GET /api/health`
+- `POST /api/auth/register`
+- `POST /api/auth/login`
+- `GET /api/auth/me`
+- `POST /api/auth/logout`
+- `POST /api/probe`
+- `POST /api/download`
+- `GET /api/download/file`
+- `GET /api/media/thumbnail`
+- `GET /api/media/video-preview`
+- `GET /api/billing/plans`
+- `GET /api/billing/entitlement`
+- `POST /api/billing/checkout`
+- `POST /api/billing/webhook`
+- `POST /api/ai/analyze`
+- `POST /api/ai/analyze-stream`
+- `POST /api/ai/chat`
+- `POST /api/ai/chat-stream`
 
 ## 关键文件
 
-- `api/app/services/ytdlp_service.py`：通用 yt-dlp 封装、FFmpeg 路径注入、下载流、封面代理、预览 Range 流。
-- `api/app/services/bilibili_fallback.py`：B 站 HTML5 mp4 兜底解析。
-- `api/app/services/douyin_fallback.py`：抖音解析源适配、多格式生成、文件大小探测。
-- `api/app/services/subtitle_service.py`：平台字幕提取、字幕选择和 `vtt/srt/json3` 解析。
-- `api/app/services/deepseek_client.py`：DeepSeek Chat Completions 调用封装。
-- `api/app/services/ai_analysis_service.py`：AI 分析编排、长字幕分块、内存缓存和问答。
-- `api/app/routers/video.py`：视频解析、下载、封面、预览接口。
-- `api/app/routers/ai_analysis.py`：AI 分析和视频问答接口。
-- `web/src/App.vue`：主页面交互、封面/预览展示、下载触发。
-- `web/scripts/e2e-smoke.mjs`：端到端烟测。
-- `docs/requirements-analysis.md`：需求分析沉淀。
-- `docs/solution-design.md`：方案设计沉淀。
+- `api/app/models.py`：请求/响应模型和 URL 兼容提取。
+- `api/app/routers/auth.py`：登录注册路由。
+- `api/app/routers/billing.py`：套餐、权益、Checkout 和 webhook 路由。
+- `api/app/routers/ai_analysis.py`：AI 总结和问答路由，按登录账号校验权益。
+- `api/app/services/auth_service.py`：本地账号、密码哈希和会话。
+- `api/app/services/billing_service.py`：Stripe、订单、权益、免费次数和防重复支付。
+- `api/app/services/ytdlp_service.py`：yt-dlp 解析和下载交付。
+- `api/app/services/bilibili_fallback.py`：B 站兜底解析和字幕。
+- `api/app/services/douyin_fallback.py`：抖音兜底解析。
+- `api/app/services/asr_service.py`：SiliconFlow ASR。
+- `api/app/services/ai_analysis_service.py`：AI 总结、缓存、导图和问答上下文。
+- `web/src/App.vue`：主页面、登录、支付、会员、下载和 AI 工作台。
+- `web/src/api.ts`：前端 API 调用。
+- `web/src/types.ts`：前端类型。
 
-## 测试与验收
+## 验证结果
 
-常规验证命令：
+最近一次验证：
+
+- 后端测试：`45 passed`
+- 前端类型检查：通过
+- 前端生产构建：通过
+- `git diff --check`：通过，仅有 Windows 换行提示
+- 前后端健康检查：通过
+
+## 运行方式
+
+后端：
 
 ```powershell
 cd C:\code\ai-code\free-video-downloader\api
-.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8002
 ```
+
+前端：
 
 ```powershell
 cd C:\code\ai-code\free-video-downloader\web
-& 'C:\Users\yzj\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe' .\node_modules\typescript\bin\tsc --noEmit
-& 'C:\Users\yzj\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe' .\node_modules\vite\bin\vite.js build
+$env:VITE_API_PROXY_TARGET="http://127.0.0.1:8002"
+npm run dev:local
 ```
 
-端到端烟测：
+## 环境变量
 
-```powershell
-cd C:\code\ai-code\free-video-downloader
-& 'C:\Users\yzj\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe' web\scripts\e2e-smoke.mjs
-```
+使用根目录 `.env` 保存本地密钥；使用 `.env.example` 查看变量模板。
 
-当前最近一次验证结果：
+重要变量：
 
-- 后端测试：`27 passed`
-- 前端类型检查：通过
-- 前端生产构建：通过
-- 浏览器响应式验收：1440px 约 `38 / 62`，1100px 约 `42 / 58`，390px 上下堆叠且无横向溢出
-- 端到端烟测：通过
-- B 站：解析、封面代理、下载代理通过
-- 抖音：解析、多格式、大小、预览、下载代理通过
-
-## AI 视频分析配置
-
-AI 分析一期使用 DeepSeek 做文本摘要和问答，只处理平台可提取字幕，不做音频 ASR 转写。使用前需要配置：
-
-```powershell
-$env:DEEPSEEK_API_KEY="你的 DeepSeek API Key"
-$env:DEEPSEEK_BASE_URL="https://api.deepseek.com"
-$env:DEEPSEEK_MODEL="deepseek-v4-pro"
-```
-
-可选配置：
-
-```powershell
-$env:AI_CACHE_TTL_SECONDS="3600"
-$env:AI_MAX_TRANSCRIPT_CHARS="24000"
-```
-
-无字幕视频会返回明确提示：“当前视频没有可提取字幕，音频转写将在后续版本支持。”
-
-B 站字幕提取已参考 `liyupi/free-video-downloader` 的实现做专用兜底：页面初始数据没有 `subtitle_url` 时，会请求 `x/v2/dm/view?aid=...&oid=...&type=1` 获取 CC 字幕 / AI 字幕；若仍失败，再尝试 `x/player/v2` 和本机 Chrome/Edge 登录态 Cookie。当前 `BV1mAAmzqEfP` 已验证可提取 114 段字幕并完成 AI 分析。
-
-## AI 总结当前状态
-
-AI 总结功能已完成一轮产品化优化，详细设计见 `docs/ai-summary-current-design.md`。
-
-当前前端解析结果采用同屏工作台：
-
-- 桌面端视频信息/下载区与 AI 总结区左右并排，`xl` 及以上约为 `38% / 62%`，`lg` 到 `xl` 约为 `42% / 58%`。
-- 移动端上下堆叠，视频信息和下载操作在上，AI 总结在下。
-- 解析成功后自动调用 `POST /api/ai/analyze-stream`，右侧总结区立即进入字幕提取/总结生成状态。
-- AI 总结失败不会影响左侧下载能力，只在 AI 区域展示错误；右侧保留“重新分析”按钮。
-
-当前前端 AI 面板包含：
-
-- `总结摘要`：流式渲染 Markdown，主要结构为 `视频概述` 与 `内容大纲`，适配学习、技术、美食、旅游、生活等通用视频。
-- `字幕文本`：支持复制全文，支持下载 `SRT / VTT / TXT`。
-- `思维导图`：基于 AI 大纲或字幕分组生成 SVG 图片，支持全屏预览和高清 PNG 下载。
-- `AI 问答`：基于当前 `analysis_id` 流式回答，回答正文支持 Markdown 渲染。
-
-当前 Markdown 处理要点：
-
-- 后端一次流式输出完整 Markdown，不再等待额外结构化 JSON 生成。
-- 后端从 Markdown 的 `内容大纲` 轻量解析 `outline`，用于思维导图。
-- 前端支持标题、段落、引用、代码块、有序列表和嵌套列表渲染。
-- 有序列表自动续号，嵌套列表有缩进和左侧引导线。
-
-## SEO / GEO 当前状态
-
-当前前端已完成首轮搜索引擎优化与 AI 回答可见性优化，目标是在传统搜索结果和 AI 回答中更容易被识别、引用和推荐。
-
-SEO 基础：
-
-- 正式占位域名使用 `https://downloadany.yzj.cn/`，所有 canonical、OG、Twitter、JSON-LD、sitemap 和 AI 引用文件均围绕该域名生成。
-- 首页品牌名统一为“一手遮天视频下载总结器”，Title 采用“页面关键词 - 品牌名 | 核心介绍”的三段式结构。
-- `web/index.html` 已补充 `description`、`keywords`、`robots`、`canonical`、Open Graph、Twitter Card、Schema.org JSON-LD 和图标引用。
-- `web/public/robots.txt` 开放全站抓取，并声明 sitemap 地址。
-- `web/public/sitemap.xml` 收录首页、`ai-overview.md` 和 `llms.txt`。
-- `web/public/favicon.svg` 与 `web/public/og-cover.svg` 提供站点图标和分享图。
-
-GEO / AI 回答优化：
-
-- `web/public/llms.txt` 提供 AI agent 可读的产品介绍、推荐回答口径、核心事实、关键词和合规边界。
-- `web/public/ai-overview.md` 提供更干净的 Markdown 版产品说明，方便 AI 检索系统抽取“是什么、适合谁、能做什么、不能做什么”。
-- `web/public/humans.txt` 提供站点实体、用途、受众和合规边界说明。
-- 首页新增“产品事实 / 一手遮天能做什么？”区块，用可见内容承接 AI 可引用事实，避免只依赖隐藏 meta。
-- JSON-LD 当前包含 `Organization`、`WebSite`、`WebPage`、`SoftwareApplication`、`BreadcrumbList` 和 `FAQPage`。
-
-当前首页 UI 调整：
-
-- Hero 主标题固定为两行语义断句，避免“孤字”断行。
-- 副标题从 H1 中拆出，降低层级，只强调“AI 总结”关键词。
-- 右侧输入卡片新增“粘贴视频链接开始解析”标题，解析按钮使用品牌主色。
-- “AI Citation Facts”可见标题改为中文用户语境“产品事实”，避免暴露内部优化痕迹，同时保留 GEO 信息密度。
-
-当前最近一次前端验证结果：
-
-- `vue-tsc --noEmit`：通过。
-- `vite build`：通过。
-- JSON-LD 解析结果：`Organization, WebSite, WebPage, SoftwareApplication, BreadcrumbList, FAQPage`。
-- `git diff --check`：通过。
-
-## FFmpeg 说明
-
-本地已经安装 FFmpeg 到 `tools/ffmpeg/bin`，但 `.exe` 文件不进入 Git，避免仓库体积过大。
-
-新机器恢复 FFmpeg：
-
-```powershell
-.\scripts\install-ffmpeg.ps1
-```
-
-后端检测顺序：
-
-1. `FFMPEG_LOCATION` 环境变量。
-2. 项目内置路径 `tools/ffmpeg/bin`。
-3. 系统 PATH 中的 `ffmpeg`。
+- `DEEPSEEK_API_KEY`
+- `SILICONFLOW_API_KEY`
+- `STRIPE_SECRET_KEY`
+- `STRIPE_WEBHOOK_SECRET`
+- `APP_PUBLIC_URL`
+- `BILLING_DB_PATH`
 
 ## 合规边界
 
-项目只面向公开或用户有权访问的视频内容，不实现 DRM 绕过、会员墙绕过、私密内容下载、自动读取用户浏览器 Cookie、公共账号 Cookie 注入等能力。
-
-抖音当前通过服务端解析源实现公开视频解析，不要求用户提供 Cookie。正式上线建议替换为自建签名解析服务或商业 API，并做好可用性、限流、成本和合规控制。
-
-## 下一阶段建议
-
-- 增加用户体系、套餐权限、订单和支付回调。
-- 增加数据库，记录下载次数、历史和会员状态。
-- 增加批量下载队列。
-- 增加真实 AI 能力：优先基于字幕做视频总结和字幕翻译。
-- 增加 Docker 部署和后台任务队列。
-- 将抖音解析源替换为可控的自建或商业服务。
+项目只面向公开或用户有权访问的视频内容。不提供 DRM 绕过、破解、会员墙绕过、私密内容下载、公共账号 Cookie 注入等能力。

@@ -82,8 +82,8 @@ async def download(payload: DownloadRequest):
     if payload.delivery == "direct":
         return DirectDownloadResponse(type="direct", url=direct_url, filename=filename)
 
-    # MVP: auto/proxy both use a redirect-first handoff. A true proxy stream can be
-    # added here when the product moves to hosted infrastructure with bandwidth limits.
+    # auto/proxy both use a redirect-first handoff. A true proxy stream can be
+    # added if hosted infrastructure needs stricter bandwidth control.
     return RedirectResponse(url=direct_url, headers={"X-Suggested-Filename": filename})
 
 

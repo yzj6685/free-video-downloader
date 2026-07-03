@@ -9,18 +9,19 @@ from app.services.ytdlp_service import YtDlpService
 
 def test_billing_plans_include_pro_membership():
     plans = get_plans().plans
+    assert len(plans) == 2
     assert any(plan.id == "pro" for plan in plans)
     pro = next(plan for plan in plans if plan.id == "pro")
-    assert any(feature.label == "视频总结" for feature in pro.features)
-    assert any(feature.label == "字幕翻译" for feature in pro.features)
+    assert any(feature.label == "无限 AI 视频总结" for feature in pro.features)
+    assert not any(feature.label == "字幕翻译" for feature in pro.features)
 
 
-def test_capabilities_mark_ai_features_as_coming_soon():
+def test_capabilities_mark_current_features_as_available():
     capabilities = get_capabilities()
     statuses = {item.key: item.status for item in capabilities.items}
     assert statuses["single_link_download"] == "available"
-    assert statuses["video_summary"] == "coming_soon"
-    assert statuses["subtitle_translate"] == "coming_soon"
+    assert statuses["ai_video_analysis"] == "available"
+    assert "subtitle_translate" not in statuses
     assert "DRM" in capabilities.compliance_note
 
 

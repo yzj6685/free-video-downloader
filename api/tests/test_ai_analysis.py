@@ -1,6 +1,7 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
@@ -12,6 +13,14 @@ from app.services.subtitle_service import SubtitleService, SubtitleTrack
 
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def allow_ai_billing(monkeypatch):
+    monkeypatch.setattr("app.routers.ai_analysis.billing_email_from_auth", lambda authorization: "test@example.com")
+    monkeypatch.setattr("app.routers.ai_analysis.billing_service.ensure_ai_analysis_allowed", lambda email: None)
+    monkeypatch.setattr("app.routers.ai_analysis.billing_service.record_ai_analysis_success", lambda email: None)
+    monkeypatch.setattr("app.routers.ai_analysis.billing_service.ensure_ai_chat_allowed", lambda email: None)
 
 
 def test_parse_vtt_subtitles():
@@ -130,6 +139,7 @@ def test_subtitle_extract_uses_douyin_metadata_when_subtitles_missing(monkeypatc
 
     service = SubtitleService()
     monkeypatch.setattr(service, "_extract_info", lambda url: {"title": "yt-dlp 标题", "subtitles": {}, "automatic_captions": {}})
+    monkeypatch.setattr("app.services.subtitle_service.asr_service.is_enabled", lambda: False)
     monkeypatch.setattr("app.services.subtitle_service.douyin_fallback_service.can_handle", lambda url: True)
     monkeypatch.setattr("app.services.subtitle_service.douyin_fallback_service.metadata_transcript", fake_metadata_transcript)
 

@@ -14,7 +14,7 @@ def video_summary() -> ComingSoonResponse:
     return ComingSoonResponse(
         status="coming_soon",
         feature="video_summary",
-        message="视频总结是会员高级能力，首版仅预留接口，后续将接入第三方 AI。",
+        message="旧版视频总结入口已停用，请使用 /api/ai/analyze 或 /api/ai/analyze-stream。",
     )
 
 
@@ -27,5 +27,5 @@ def translate_subtitles() -> ComingSoonResponse:
     return ComingSoonResponse(
         status="coming_soon",
         feature="subtitle_translate",
-        message="字幕翻译是会员高级能力，首版仅预留接口，后续将接入第三方 AI。",
+        message="当前产品未提供字幕翻译，请使用 AI 总结、字幕文本和视频问答功能。",
     )

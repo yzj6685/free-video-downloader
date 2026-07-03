@@ -76,7 +76,7 @@ class DouyinFallbackService:
                 errors.append(f"{endpoint}: {payload.get('msg') or payload.get('message') or 'parse failed'}")
                 continue
             if self._is_non_video_payload(payload):
-                raise HTTPException(status_code=422, detail="该抖音链接被识别为图集或非视频内容，首版只支持视频下载。")
+                raise HTTPException(status_code=422, detail="该抖音链接被识别为图集或非视频内容，当前只支持视频下载。")
             if self._pick_media_url(payload):
                 return payload
             errors.append(f"{endpoint}: parsed successfully but did not include a video URL")
@@ -87,7 +87,7 @@ class DouyinFallbackService:
             errors.append(f"share-page: {exc}")
         else:
             if self._is_non_video_payload(payload):
-                raise HTTPException(status_code=422, detail="该抖音链接被识别为图集或非视频内容，首版只支持视频下载。")
+                raise HTTPException(status_code=422, detail="该抖音链接被识别为图集或非视频内容，当前只支持视频下载。")
             if self._pick_media_url(payload):
                 return payload
             errors.append("share-page: parsed successfully but did not include a video URL")

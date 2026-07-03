@@ -20,6 +20,8 @@ __pycache__/
 # Local environment
 .env
 .env.*
+!.env.example
+*.sqlite3
 
 # Local screenshots and temporary files
 *-screenshot.png
