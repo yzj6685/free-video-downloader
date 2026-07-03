@@ -114,12 +114,12 @@ $env:AI_MAX_TRANSCRIPT_CHARS="24000"
 ## 验证命令
 
 ```powershell
-cd C:\code\ai-code\free-video-downloader\api
+cd api
 .\.venv\Scripts\python.exe -m pytest
 ```
 
 ```powershell
-cd C:\code\ai-code\free-video-downloader\web
+cd web
 pnpm typecheck
 pnpm build
 ```

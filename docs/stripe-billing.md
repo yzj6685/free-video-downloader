@@ -22,7 +22,7 @@ STRIPE_WEBHOOK_SECRET="whsec_xxx"
 STRIPE_PRODUCT_NAME="一手遮天视频下载总结器 Pro"
 STRIPE_PRICE_CURRENCY="cny"
 STRIPE_PRICE_AMOUNT="1990"
-BILLING_DB_PATH="C:\code\ai-code\free-video-downloader\api\billing.sqlite3"
+BILLING_DB_PATH="api\billing.sqlite3"
 ```
 
 说明：
@@ -42,7 +42,7 @@ stripe login
 2. 启动后端。
 
 ```powershell
-cd C:\code\ai-code\free-video-downloader\api
+cd api
 .\.venv\Scripts\Activate.ps1
 python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8002
 ```

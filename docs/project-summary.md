@@ -79,14 +79,14 @@
 后端：
 
 ```powershell
-cd C:\code\ai-code\free-video-downloader\api
+cd api
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8002
 ```
 
 前端：
 
 ```powershell
-cd C:\code\ai-code\free-video-downloader\web
+cd web
 $env:VITE_API_PROXY_TARGET="http://127.0.0.1:8002"
 npm run dev:local
 ```
