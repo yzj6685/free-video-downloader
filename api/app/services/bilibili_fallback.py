@@ -20,8 +20,7 @@ class BilibiliFallbackService:
         return "bilibili.com/video/" in url or "b23.tv/" in url
 
     def probe(self, url: str) -> ProbeResponse:
-        state = self._initial_state(url)
-        video = state.get("videoData") or {}
+        video = self._video_data(url)
         bvid = video.get("bvid")
         aid = video.get("aid")
         cid = video.get("cid") or self._first_page_cid(video)
@@ -43,8 +42,7 @@ class BilibiliFallbackService:
         )
 
     def direct_url(self, url: str, format_id: str) -> tuple[str, str]:
-        state = self._initial_state(url)
-        video = state.get("videoData") or {}
+        video = self._video_data(url)
         bvid = video.get("bvid")
         aid = video.get("aid")
         cid = video.get("cid") or self._first_page_cid(video)
@@ -62,8 +60,7 @@ class BilibiliFallbackService:
         return media_url, filename
 
     def subtitles(self, url: str, language: str = "zh") -> tuple[str, list[TranscriptSegment]]:
-        state = self._initial_state(url)
-        video = state.get("videoData") or {}
+        video = self._video_data(url)
         bvid = video.get("bvid")
         aid = video.get("aid")
         cid = video.get("cid") or self._first_page_cid(video)
@@ -113,10 +110,53 @@ class BilibiliFallbackService:
                 if chunk:
                     yield chunk
 
+    def _video_data(self, url: str) -> dict[str, Any]:
+        bvid = self._bvid_from_url(url)
+        if bvid:
+            try:
+                return self._view_data(bvid)
+            except HTTPException:
+                raise
+            except Exception:
+                pass
+
+        state = self._initial_state(url)
+        return state.get("videoData") or {}
+
+    def _view_data(self, bvid: str) -> dict[str, Any]:
+        query = urllib.parse.urlencode({"bvid": bvid})
+        url = f"https://api.bilibili.com/x/web-interface/view?{query}"
+        with httpx.Client(headers=self._headers(f"https://www.bilibili.com/video/{bvid}"), timeout=25) as client:
+            response = client.get(url)
+            response.raise_for_status()
+            payload = response.json()
+
+        if payload.get("code") != 0:
+            raise RuntimeError(payload.get("message") or "B 站视频信息接口返回失败。")
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise RuntimeError("B 站视频信息接口未返回有效数据。")
+        return data
+
+    def _bvid_from_url(self, url: str) -> str | None:
+        match = re.search(r"\b(BV[0-9A-Za-z]{10})\b", url)
+        return match.group(1) if match else None
+
     def _initial_state(self, url: str) -> dict[str, Any]:
         with httpx.Client(headers=self._headers(url), follow_redirects=True, timeout=25) as client:
             response = client.get(url)
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 412:
+                    raise HTTPException(
+                        status_code=428,
+                        detail=(
+                            "平台触发了访客校验，当前无 Cookie 会话无法解析。"
+                            "请配置 YTDLP_COOKIE_FILE 后重试，或更换无需 Cookie 的公开视频链接。"
+                        ),
+                    ) from exc
+                raise
         match = re.search(r"window\.__INITIAL_STATE__=(.*?);\(function\(\)", response.text)
         if not match:
             raise HTTPException(status_code=502, detail="B 站页面结构发生变化，无法提取视频信息。")
