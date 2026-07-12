@@ -2,9 +2,17 @@
 
 一个基于 **Vue 3 + FastAPI + yt-dlp + DeepSeek + Stripe** 的在线视频下载与 AI 视频总结工具。用户粘贴公开视频链接后，可以解析视频信息、选择格式下载，并在登录后生成视频摘要、字幕文本、思维导图和视频问答。
 
-![项目首页](docs/images/homepage.png)
+## 功能预览
 
-![解析与 AI 总结结果](docs/images/analysis-result.png)
+![项目首页](docs/images/home-hero.png)
+
+![AI 总结结果](docs/images/summary-result.png)
+
+![字幕文本](docs/images/subtitle-panel.png)
+
+![思维导图](docs/images/mind-map.png)
+
+![视频问答](docs/images/ai-chat.png)
 
 ## 一、项目介绍
 
